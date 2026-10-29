@@ -1,0 +1,6 @@
+{
+  "name": "FloorPlan3D OpenGL Studio",
+  "description": "Explainable Floor-Plan-to-3D Reconstruction and Interactive Architectural Visualization using OpenGL and OpenCV.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
