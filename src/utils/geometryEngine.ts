@@ -39,31 +39,63 @@ export interface Mesh3D {
 
 export interface ImageToWorldConfig {
   scale: number; // world units per pixel
-  u0: number;    // origin x in image coordinates
-  v0: number;    // origin y in image coordinates
+  u0: number;    // origin x in image coordinates (bounding-box centre)
+  v0: number;    // origin y in image coordinates (bounding-box centre)
+}
+
+// ---------------------------------------------------------------------------
+// B2 Core data-contract types (matches the C++ structs in the plan)
+// ---------------------------------------------------------------------------
+
+/** A detected or manually-placed wall segment in pixel space until mapped. */
+export interface Segment2D {
+  id: string;
+  a: Point2D; // start (pixels before mapping, meters after)
+  b: Point2D; // end
+  thickness: number; // pixels before mapping, meters after
+}
+
+/** A door or window opening parameterised along a wall. */
+export interface Opening {
+  wallId: string;
+  t0: number;   // 0..1 along the wall centerline, start
+  t1: number;   // 0..1 along the wall centerline, end
+  sill: number; // meters — 0 for doors
+  head: number; // meters
+}
+
+/** Scale calibration result. */
+export interface Scale {
+  metersPerPixel: number;
+  calibrated: boolean; // false → default heuristic, labelled "uncalibrated"
 }
 
 /**
  * Maps 2D image pixel coordinates (u, v) to 3D world floor coordinates (x, z).
- * Formula:
- *   x = s * (u - u0)
- *   z = -s * (v - v0)
- * Note: Negative z accounts for standard OpenGL coordinate conventions where
- * looking into the screen is along -Z.
+ *
+ * Coordinate conventions (B3, fix R3):
+ *   World: right-handed, +Y up, plan lies in XZ plane.
+ *   x =  s * (u − u0)   — image-right  = +X
+ *   z = +s * (v − v0)   — image-down   = +Z  (NO mirroring)
+ *
+ * Acceptance test: an asymmetric (L-shaped) plan rendered top-down with
+ *   eye=(cx, H, cz), up=(0, 0, −1) must match the source image without
+ *   left/right reflection.
  */
 export function imageToWorld(u: number, v: number, config: ImageToWorldConfig): Point2D {
   return {
-    x: config.scale * (u - config.u0),
-    z: -config.scale * (v - config.v0),
+    x:  config.scale * (u - config.u0),
+    z: +config.scale * (v - config.v0),   // ← positive sign (R3 fix)
   };
 }
 
 /**
  * Maps 3D world floor coordinates (x, z) back to image pixel coordinates (u, v).
+ * Inverse of imageToWorld with corrected sign.
  */
 export function worldToImage(x: number, z: number, config: ImageToWorldConfig): [number, number] {
-  const u = x / config.scale + config.u0;
-  const v = -z / config.scale + config.v0;
+  const u =  x / config.scale + config.u0;
+  const v =  z / config.scale + config.v0;  // ← positive sign (R3 fix)
   return [Math.round(u), Math.round(v)];
 }
 
@@ -135,62 +167,77 @@ export function extrudeWallSegment(wall: WallSegment2D): Mesh3D {
       { position: p2, normal, texCoord: [1, 1] },
       { position: p3, normal, texCoord: [0, 1] }
     );
-    // CCW winding: (0, 1, 2) and (0, 2, 3)
+    // CCW winding as seen from OUTSIDE (outward normal).
+    // Convention: cross(p1−p0, p2−p0) must be in the same direction as `normal`.
+    // Triangles: (p0, p1, p2) and (p0, p2, p3).
     indices.push(baseIdx, baseIdx + 1, baseIdx + 2);
     indices.push(baseIdx, baseIdx + 2, baseIdx + 3);
   }
 
-  // 1. Front face (along +normal): D -> A -> At -> Dt
+  // Vertex layout (bottom, y=0):
+  //   A = start + n*halfT  (front-start corner)
+  //   B = start - n*halfT  (back-start corner)
+  //   C = end   - n*halfT  (back-end corner)
+  //   D = end   + n*halfT  (front-end corner)
+  // Top vertices (y=h) are denoted At, Bt, Ct, Dt.
+  //
+  // For each face, vertices are ordered CCW as seen from outside.
+  // Verification (front face, normal = +n = (0,0,1) for a +X wall):
+  //   A(0,0,0.1) → D(4,0,0.1) → Dt(4,h,0.1) → At(0,h,0.1)
+  //   e1 = D-A = (4,0,0), e2 = Dt-A = (4,h,0)
+  //   cross = (0,0,4h) → dot with (0,0,1) = 4h > 0 ✓
+
+  // 1. Front face (along +normal): A → D → Dt → At
   addQuad(
-    [Dx, 0, Dz],
     [Ax, 0, Az],
-    [Ax, h, Az],
+    [Dx, 0, Dz],
     [Dx, h, Dz],
+    [Ax, h, Az],
     [nx, 0, nz]
   );
 
-  // 2. Back face (along -normal): B -> C -> Ct -> Bt
+  // 2. Back face (along -normal): C → B → Bt → Ct
   addQuad(
-    [Bx, 0, Bz],
     [Cx, 0, Cz],
-    [Cx, h, Cz],
+    [Bx, 0, Bz],
     [Bx, h, Bz],
+    [Cx, h, Cz],
     [-nx, 0, -nz]
   );
 
-  // 3. Start cap (along -tangent): A -> B -> Bt -> At
+  // 3. Start cap (along -tangent): B → A → At → Bt
   addQuad(
-    [Ax, 0, Az],
     [Bx, 0, Bz],
-    [Bx, h, Bz],
+    [Ax, 0, Az],
     [Ax, h, Az],
+    [Bx, h, Bz],
     [-ux, 0, -uz]
   );
 
-  // 4. End cap (along +tangent): C -> D -> Dt -> Ct
+  // 4. End cap (along +tangent): D → C → Ct → Dt
   addQuad(
-    [Cx, 0, Cz],
     [Dx, 0, Dz],
-    [Dx, h, Dz],
+    [Cx, 0, Cz],
     [Cx, h, Cz],
+    [Dx, h, Dz],
     [ux, 0, uz]
   );
 
-  // 5. Top face (along +Y): At -> Bt -> Ct -> Dt
+  // 5. Top face (along +Y): Bt → At → Dt → Ct  (CCW from above)
   addQuad(
-    [Ax, h, Az],
     [Bx, h, Bz],
-    [Cx, h, Cz],
+    [Ax, h, Az],
     [Dx, h, Dz],
+    [Cx, h, Cz],
     [0, 1, 0]
   );
 
-  // 6. Bottom face (along -Y): D -> C -> B -> A
+  // 6. Bottom face (along -Y): A → B → C → D  (CCW from below)
   addQuad(
-    [Dx, 0, Dz],
-    [Cx, 0, Cz],
-    [Bx, 0, Bz],
     [Ax, 0, Az],
+    [Bx, 0, Bz],
+    [Cx, 0, Cz],
+    [Dx, 0, Dz],
     [0, -1, 0]
   );
 
@@ -659,3 +706,252 @@ export function snapToFloorGeometry(
   return { point: closest, snapped: didSnap };
 }
 
+// ---------------------------------------------------------------------------
+// B8.7 Mesh Validators  (Tier-1 deliverables)
+// ---------------------------------------------------------------------------
+
+export interface WindingResult {
+  totalTriangles: number;
+  passingTriangles: number;
+  passRate: number; // 0..1
+  failedIndices: number[]; // indices of failing triangles (i/3)
+}
+
+/**
+ * Winding validator: for every triangle, checks that
+ *   dot(cross(v1−v0, v2−v0), faceNormal) > 0
+ * meaning the stored face normal agrees with the CCW winding order.
+ */
+export function validateWinding(mesh: Mesh3D): WindingResult {
+  const { vertices, indices } = mesh;
+  let passing = 0;
+  const failed: number[] = [];
+
+  for (let t = 0; t < indices.length; t += 3) {
+    const i0 = indices[t], i1 = indices[t + 1], i2 = indices[t + 2];
+    const v0 = vertices[i0].position;
+    const v1 = vertices[i1].position;
+    const v2 = vertices[i2].position;
+    const n  = vertices[i0].normal;
+
+    // Edge vectors
+    const e1x = v1[0] - v0[0], e1y = v1[1] - v0[1], e1z = v1[2] - v0[2];
+    const e2x = v2[0] - v0[0], e2y = v2[1] - v0[1], e2z = v2[2] - v0[2];
+
+    // Cross product e1 × e2
+    const cx = e1y * e2z - e1z * e2y;
+    const cy = e1z * e2x - e1x * e2z;
+    const cz = e1x * e2y - e1y * e2x;
+
+    // Dot with face normal
+    const dot = cx * n[0] + cy * n[1] + cz * n[2];
+
+    if (dot > 0) {
+      passing++;
+    } else {
+      failed.push(t / 3);
+    }
+  }
+
+  const total = Math.floor(indices.length / 3);
+  return { totalTriangles: total, passingTriangles: passing, passRate: total > 0 ? passing / total : 1, failedIndices: failed };
+}
+
+export interface NormalResult {
+  totalFaces: number;
+  outwardFaces: number;
+  outwardRate: number; // 0..1
+}
+
+/**
+ * Outward-normal validator: for each quad face (4 vertices, same normal),
+ * checks that the normal points away from the box centroid.
+ * Reports the percentage of face groups whose normals point outward.
+ */
+export function validateOutwardNormals(mesh: Mesh3D): NormalResult {
+  const { vertices } = mesh;
+  if (vertices.length === 0) return { totalFaces: 0, outwardFaces: 0, outwardRate: 1 };
+
+  // Compute mesh centroid
+  let cx = 0, cy = 0, cz = 0;
+  for (const v of vertices) {
+    cx += v.position[0];
+    cy += v.position[1];
+    cz += v.position[2];
+  }
+  cx /= vertices.length; cy /= vertices.length; cz /= vertices.length;
+
+  // Group vertices into faces of 4 (each addQuad generates 4 verts)
+  const faceCount = Math.floor(vertices.length / 4);
+  let outward = 0;
+
+  for (let f = 0; f < faceCount; f++) {
+    const base = f * 4;
+    const n = vertices[base].normal;
+    // Face centroid
+    const fcx = (vertices[base].position[0] + vertices[base+1].position[0] + vertices[base+2].position[0] + vertices[base+3].position[0]) / 4;
+    const fcy = (vertices[base].position[1] + vertices[base+1].position[1] + vertices[base+2].position[1] + vertices[base+3].position[1]) / 4;
+    const fcz = (vertices[base].position[2] + vertices[base+1].position[2] + vertices[base+2].position[2] + vertices[base+3].position[2]) / 4;
+
+    // Vector from mesh centroid to face centroid
+    const dx = fcx - cx, dy = fcy - cy, dz = fcz - cz;
+    const dot = n[0] * dx + n[1] * dy + n[2] * dz;
+    if (dot >= 0) outward++;
+  }
+
+  return { totalFaces: faceCount, outwardFaces: outward, outwardRate: faceCount > 0 ? outward / faceCount : 1 };
+}
+
+export interface ManifoldResult {
+  isManifold: boolean;
+  edgeCount: number;
+  nonManifoldEdges: number; // edges with count !== 2
+  openEdges: number;        // edges with count === 1
+}
+
+/** Canonical edge key: always smaller index first. */
+function edgeKey(a: number, b: number): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+/**
+ * Edge-manifold validator: welds vertices by position, counts triangle uses
+ * per edge. A closed 2-manifold has every edge used exactly twice.
+ * Open edges (count=1) indicate holes; count>2 means non-manifold.
+ */
+export function validateEdgeManifold(mesh: Mesh3D): ManifoldResult {
+  const { vertices, indices } = mesh;
+  const EPS = 1e-6;
+
+  // Weld vertices by position → representative index map
+  const weldMap: number[] = new Array(vertices.length);
+  const representatives: number[] = [];
+
+  for (let i = 0; i < vertices.length; i++) {
+    let found = -1;
+    const p = vertices[i].position;
+    for (const r of representatives) {
+      const q = vertices[r].position;
+      if (Math.abs(p[0]-q[0]) < EPS && Math.abs(p[1]-q[1]) < EPS && Math.abs(p[2]-q[2]) < EPS) {
+        found = r;
+        break;
+      }
+    }
+    if (found === -1) { representatives.push(i); weldMap[i] = i; }
+    else { weldMap[i] = found; }
+  }
+
+  // Count edge usages
+  const edgeCounts = new Map<string, number>();
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = weldMap[indices[t]], b = weldMap[indices[t+1]], c = weldMap[indices[t+2]];
+    for (const k of [edgeKey(a,b), edgeKey(b,c), edgeKey(a,c)]) {
+      edgeCounts.set(k, (edgeCounts.get(k) ?? 0) + 1);
+    }
+  }
+
+  let open = 0, nonManifold = 0;
+  for (const cnt of edgeCounts.values()) {
+    if (cnt === 1) open++;
+    else if (cnt !== 2) nonManifold++;
+  }
+
+  return {
+    isManifold: open === 0 && nonManifold === 0,
+    edgeCount: edgeCounts.size,
+    nonManifoldEdges: nonManifold,
+    openEdges: open,
+  };
+}
+
+export interface DimensionResult {
+  expectedMeters: number;
+  measuredMeters: number;
+  errorMeters: number;
+  withinTolerance: boolean;
+}
+
+/**
+ * Dimension validator: measures the length of a wall mesh along its longest
+ * axis and compares against the expected meter value.
+ * Tolerance defaults to 1 mm.
+ */
+export function validateDimension(
+  mesh: Mesh3D,
+  expectedMeters: number,
+  toleranceMeters = 0.001
+): DimensionResult {
+  let minX = Infinity, maxX = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  for (const v of mesh.vertices) {
+    minX = Math.min(minX, v.position[0]); maxX = Math.max(maxX, v.position[0]);
+    minZ = Math.min(minZ, v.position[2]); maxZ = Math.max(maxZ, v.position[2]);
+  }
+  const spanX = maxX - minX;
+  const spanZ = maxZ - minZ;
+  const measured = Math.max(spanX, spanZ);
+  const error = Math.abs(measured - expectedMeters);
+  return { expectedMeters, measuredMeters: measured, errorMeters: error, withinTolerance: error <= toleranceMeters };
+}
+
+// ---------------------------------------------------------------------------
+// OBJ Export (B8.7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Exports a Mesh3D to a Wavefront OBJ string.
+ * Includes vertex positions, normals, texture coordinates, and indexed faces.
+ * The result can be saved as a .obj file and opened in MeshLab or Blender.
+ */
+export function exportToOBJ(mesh: Mesh3D, objectName = 'FloorPlan3D'): string {
+  const lines: string[] = [];
+  lines.push(`# FloorPlan3D OBJ Export`);
+  lines.push(`# Vertices: ${mesh.vertices.length}  Triangles: ${Math.floor(mesh.indices.length / 3)}`);
+  lines.push(`o ${objectName}`);
+  lines.push('');
+
+  // Vertex positions
+  for (const v of mesh.vertices) {
+    lines.push(`v ${v.position[0].toFixed(6)} ${v.position[1].toFixed(6)} ${v.position[2].toFixed(6)}`);
+  }
+  lines.push('');
+
+  // Vertex normals
+  for (const v of mesh.vertices) {
+    lines.push(`vn ${v.normal[0].toFixed(6)} ${v.normal[1].toFixed(6)} ${v.normal[2].toFixed(6)}`);
+  }
+  lines.push('');
+
+  // Texture coordinates
+  for (const v of mesh.vertices) {
+    lines.push(`vt ${v.texCoord[0].toFixed(6)} ${v.texCoord[1].toFixed(6)}`);
+  }
+  lines.push('');
+
+  // Faces (1-indexed in OBJ, format: v/vt/vn)
+  lines.push('usemtl default');
+  for (let i = 0; i < mesh.indices.length; i += 3) {
+    const i0 = mesh.indices[i] + 1;
+    const i1 = mesh.indices[i + 1] + 1;
+    const i2 = mesh.indices[i + 2] + 1;
+    lines.push(`f ${i0}/${i0}/${i0} ${i1}/${i1}/${i1} ${i2}/${i2}/${i2}`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Triggers a browser download of an OBJ file.
+ */
+export function downloadOBJ(mesh: Mesh3D, filename = 'floorplan3d.obj'): void {
+  const content = exportToOBJ(mesh);
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
