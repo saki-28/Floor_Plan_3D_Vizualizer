@@ -17,14 +17,28 @@ export interface WallSegment2D {
   end: Point2D;
   thickness: number;
   height: number;
-  hasDoor?: boolean;
-  doorPosition?: number; // 0.0 to 1.0 along segment
-  doorWidth?: number;
-  hasWindow?: boolean;
-  windowPosition?: number;
-  windowWidth?: number;
-  windowSillHeight?: number;
-  windowHeight?: number;
+}
+
+export type OpeningKind = 'door' | 'window';
+
+/**
+ * A door or window cut into a wall. Plans keep openings in their own list (not as fields of a
+ * wall), so a wall can hold any number of them and every source of plans (samples, files,
+ * images, drawing) writes the same thing.
+ */
+export interface Opening2D {
+  id: string;
+  kind: OpeningKind;
+  /** The wall it is cut into. */
+  wallId: string;
+  /** Centre along the wall: 0 at the wall's start, 1 at its end. */
+  position: number;
+  /** Width along the wall, metres. */
+  width: number;
+  /** Height of its bottom edge above the floor, metres (0 for a door). */
+  sill: number;
+  /** Height of the opening itself, metres. */
+  height: number;
 }
 
 export interface Room2D {
@@ -57,6 +71,7 @@ export interface FloorPlanDataset {
   u0: number;
   v0: number;
   walls: WallSegment2D[];
+  openings: Opening2D[];
   rooms: Room2D[];
   furniture: FurnitureItem[];
 }

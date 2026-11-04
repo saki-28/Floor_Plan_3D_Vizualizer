@@ -1,0 +1,920 @@
+{
+  "generatedBy": "scripts/generate-test-plans.ts",
+  "plans": [
+    {
+      "id": "apt-2bed-clean",
+      "file": "apt-2bed-clean.png",
+      "name": "Two-bedroom apartment (clean)",
+      "description": "Clean drawing: doors with swing arcs, windows, room labels, dimension lines.",
+      "sourcePlanId": "apt-2bed",
+      "width": 916,
+      "height": 736,
+      "pixelsPerMeter": 60,
+      "wallCount": 10,
+      "groundTruthPieces": [
+        {
+          "id": "w_ext_n-1",
+          "ax": 98,
+          "ay": 98,
+          "bx": 260,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_n-2",
+          "ax": 368,
+          "ay": 98,
+          "bx": 818,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_e-1",
+          "ax": 818,
+          "ay": 98,
+          "bx": 818,
+          "by": 308,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_e-2",
+          "ax": 818,
+          "ay": 428,
+          "bx": 818,
+          "by": 638,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_s-1",
+          "ax": 818,
+          "ay": 638,
+          "bx": 272,
+          "by": 638,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_s-2",
+          "ax": 212,
+          "ay": 638,
+          "bx": 98,
+          "by": 638,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_w-1",
+          "ax": 98,
+          "ay": 638,
+          "bx": 98,
+          "by": 359,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_w-2",
+          "ax": 98,
+          "ay": 269,
+          "bx": 98,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "w_int_v1-1",
+          "ax": 488,
+          "ay": 98,
+          "bx": 488,
+          "by": 341,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_v1-2",
+          "ax": 488,
+          "ay": 395,
+          "bx": 488,
+          "by": 458,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_h1-1",
+          "ax": 488,
+          "ay": 368,
+          "bx": 818,
+          "by": 368,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_k1-1",
+          "ax": 98,
+          "ay": 440,
+          "bx": 215,
+          "by": 440,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_k1-2",
+          "ax": 269,
+          "ay": 440,
+          "bx": 338,
+          "by": 440,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_k2-1",
+          "ax": 338,
+          "ay": 440,
+          "bx": 338,
+          "by": 638,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_b1-1",
+          "ax": 488,
+          "ay": 500,
+          "bx": 554,
+          "by": 500,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_b1-2",
+          "ax": 602,
+          "ay": 500,
+          "bx": 668,
+          "by": 500,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_b2-1",
+          "ax": 668,
+          "ay": 500,
+          "bx": 668,
+          "by": 638,
+          "thickness": 9
+        }
+      ],
+      "groundTruthWalls": [
+        {
+          "id": "w_ext_n",
+          "ax": 98,
+          "ay": 98,
+          "bx": 818,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_e",
+          "ax": 818,
+          "ay": 98,
+          "bx": 818,
+          "by": 638,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_s",
+          "ax": 818,
+          "ay": 638,
+          "bx": 98,
+          "by": 638,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_w",
+          "ax": 98,
+          "ay": 638,
+          "bx": 98,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "w_int_v1",
+          "ax": 488,
+          "ay": 98,
+          "bx": 488,
+          "by": 458,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_h1",
+          "ax": 488,
+          "ay": 368,
+          "bx": 818,
+          "by": 368,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_k1",
+          "ax": 98,
+          "ay": 440,
+          "bx": 338,
+          "by": 440,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_k2",
+          "ax": 338,
+          "ay": 440,
+          "bx": 338,
+          "by": 638,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_b1",
+          "ax": 488,
+          "ay": 500,
+          "bx": 668,
+          "by": 500,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_b2",
+          "ax": 668,
+          "ay": 500,
+          "bx": 668,
+          "by": 638,
+          "thickness": 9
+        }
+      ]
+    },
+    {
+      "id": "studio-loft-clean",
+      "file": "studio-loft-clean.png",
+      "name": "Studio loft (clean)",
+      "description": "Simple plan with one partitioned bathroom.",
+      "sourcePlanId": "studio-loft",
+      "width": 670,
+      "height": 670,
+      "pixelsPerMeter": 60,
+      "wallCount": 6,
+      "groundTruthPieces": [
+        {
+          "id": "w1-1",
+          "ax": 95,
+          "ay": 95,
+          "bx": 263,
+          "by": 95,
+          "thickness": 15
+        },
+        {
+          "id": "w1-2",
+          "ax": 407,
+          "ay": 95,
+          "bx": 575,
+          "by": 95,
+          "thickness": 15
+        },
+        {
+          "id": "w2-1",
+          "ax": 575,
+          "ay": 95,
+          "bx": 575,
+          "by": 575,
+          "thickness": 15
+        },
+        {
+          "id": "w3-1",
+          "ax": 575,
+          "ay": 575,
+          "bx": 461,
+          "by": 575,
+          "thickness": 15
+        },
+        {
+          "id": "w3-2",
+          "ax": 401,
+          "ay": 575,
+          "bx": 95,
+          "by": 575,
+          "thickness": 15
+        },
+        {
+          "id": "w4-1",
+          "ax": 95,
+          "ay": 575,
+          "bx": 95,
+          "by": 287,
+          "thickness": 15
+        },
+        {
+          "id": "w4-2",
+          "ax": 95,
+          "ay": 191,
+          "bx": 95,
+          "by": 95,
+          "thickness": 15
+        },
+        {
+          "id": "w5-1",
+          "ax": 425,
+          "ay": 575,
+          "bx": 425,
+          "by": 533,
+          "thickness": 9
+        },
+        {
+          "id": "w5-2",
+          "ax": 425,
+          "ay": 485,
+          "bx": 425,
+          "by": 443,
+          "thickness": 9
+        },
+        {
+          "id": "w6-1",
+          "ax": 425,
+          "ay": 443,
+          "bx": 575,
+          "by": 443,
+          "thickness": 9
+        }
+      ],
+      "groundTruthWalls": [
+        {
+          "id": "w1",
+          "ax": 95,
+          "ay": 95,
+          "bx": 575,
+          "by": 95,
+          "thickness": 15
+        },
+        {
+          "id": "w2",
+          "ax": 575,
+          "ay": 95,
+          "bx": 575,
+          "by": 575,
+          "thickness": 15
+        },
+        {
+          "id": "w3",
+          "ax": 575,
+          "ay": 575,
+          "bx": 95,
+          "by": 575,
+          "thickness": 15
+        },
+        {
+          "id": "w4",
+          "ax": 95,
+          "ay": 575,
+          "bx": 95,
+          "by": 95,
+          "thickness": 15
+        },
+        {
+          "id": "w5",
+          "ax": 425,
+          "ay": 575,
+          "bx": 425,
+          "by": 443,
+          "thickness": 9
+        },
+        {
+          "id": "w6",
+          "ax": 425,
+          "ay": 443,
+          "bx": 575,
+          "by": 443,
+          "thickness": 9
+        }
+      ]
+    },
+    {
+      "id": "bungalow-l-clean",
+      "file": "bungalow-l-clean.png",
+      "name": "L-shaped bungalow (clean)",
+      "description": "Concave outline with thick exterior walls.",
+      "sourcePlanId": "bungalow-l",
+      "width": 916,
+      "height": 796,
+      "pixelsPerMeter": 60,
+      "wallCount": 8,
+      "groundTruthPieces": [
+        {
+          "id": "wl1-1",
+          "ax": 98,
+          "ay": 98,
+          "bx": 248,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "wl1-2",
+          "ax": 368,
+          "ay": 98,
+          "bx": 518,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "wl2-1",
+          "ax": 518,
+          "ay": 98,
+          "bx": 518,
+          "by": 398,
+          "thickness": 18
+        },
+        {
+          "id": "wl3-1",
+          "ax": 518,
+          "ay": 398,
+          "bx": 614,
+          "by": 398,
+          "thickness": 18
+        },
+        {
+          "id": "wl3-2",
+          "ax": 722,
+          "ay": 398,
+          "bx": 818,
+          "by": 398,
+          "thickness": 18
+        },
+        {
+          "id": "wl4-1",
+          "ax": 818,
+          "ay": 398,
+          "bx": 818,
+          "by": 482,
+          "thickness": 18
+        },
+        {
+          "id": "wl4-2",
+          "ax": 818,
+          "ay": 614,
+          "bx": 818,
+          "by": 698,
+          "thickness": 18
+        },
+        {
+          "id": "wl5-1",
+          "ax": 818,
+          "ay": 698,
+          "bx": 641,
+          "by": 698,
+          "thickness": 18
+        },
+        {
+          "id": "wl5-2",
+          "ax": 575,
+          "ay": 698,
+          "bx": 398,
+          "by": 698,
+          "thickness": 18
+        },
+        {
+          "id": "wl6-1",
+          "ax": 398,
+          "ay": 698,
+          "bx": 398,
+          "by": 458,
+          "thickness": 18
+        },
+        {
+          "id": "wl7-1",
+          "ax": 398,
+          "ay": 458,
+          "bx": 98,
+          "by": 458,
+          "thickness": 18
+        },
+        {
+          "id": "wl8-1",
+          "ax": 98,
+          "ay": 458,
+          "bx": 98,
+          "by": 362,
+          "thickness": 18
+        },
+        {
+          "id": "wl8-2",
+          "ax": 98,
+          "ay": 266,
+          "bx": 98,
+          "by": 98,
+          "thickness": 18
+        }
+      ],
+      "groundTruthWalls": [
+        {
+          "id": "wl1",
+          "ax": 98,
+          "ay": 98,
+          "bx": 518,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "wl2",
+          "ax": 518,
+          "ay": 98,
+          "bx": 518,
+          "by": 398,
+          "thickness": 18
+        },
+        {
+          "id": "wl3",
+          "ax": 518,
+          "ay": 398,
+          "bx": 818,
+          "by": 398,
+          "thickness": 18
+        },
+        {
+          "id": "wl4",
+          "ax": 818,
+          "ay": 398,
+          "bx": 818,
+          "by": 698,
+          "thickness": 18
+        },
+        {
+          "id": "wl5",
+          "ax": 818,
+          "ay": 698,
+          "bx": 398,
+          "by": 698,
+          "thickness": 18
+        },
+        {
+          "id": "wl6",
+          "ax": 398,
+          "ay": 698,
+          "bx": 398,
+          "by": 458,
+          "thickness": 18
+        },
+        {
+          "id": "wl7",
+          "ax": 398,
+          "ay": 458,
+          "bx": 98,
+          "by": 458,
+          "thickness": 18
+        },
+        {
+          "id": "wl8",
+          "ax": 98,
+          "ay": 458,
+          "bx": 98,
+          "by": 98,
+          "thickness": 18
+        }
+      ]
+    },
+    {
+      "id": "office-scan-noisy",
+      "file": "office-scan-noisy.png",
+      "name": "Office (scan: noise, bold labels)",
+      "description": "Tinted paper, uneven lighting, grain, specks, and bold labels thick enough to survive the opening.",
+      "sourcePlanId": "noisy-scan",
+      "width": 856,
+      "height": 676,
+      "pixelsPerMeter": 60,
+      "wallCount": 5,
+      "groundTruthPieces": [
+        {
+          "id": "wn1-1",
+          "ax": 98,
+          "ay": 98,
+          "bx": 302,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "wn1-2",
+          "ax": 422,
+          "ay": 98,
+          "bx": 758,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "wn2-1",
+          "ax": 758,
+          "ay": 98,
+          "bx": 758,
+          "by": 578,
+          "thickness": 18
+        },
+        {
+          "id": "wn3-1",
+          "ax": 758,
+          "ay": 578,
+          "bx": 623,
+          "by": 578,
+          "thickness": 18
+        },
+        {
+          "id": "wn3-2",
+          "ax": 563,
+          "ay": 578,
+          "bx": 98,
+          "by": 578,
+          "thickness": 18
+        },
+        {
+          "id": "wn4-1",
+          "ax": 98,
+          "ay": 578,
+          "bx": 98,
+          "by": 386,
+          "thickness": 18
+        },
+        {
+          "id": "wn4-2",
+          "ax": 98,
+          "ay": 290,
+          "bx": 98,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "wn5-1",
+          "ax": 428,
+          "ay": 98,
+          "bx": 428,
+          "by": 359,
+          "thickness": 9
+        },
+        {
+          "id": "wn5-2",
+          "ax": 428,
+          "ay": 413,
+          "bx": 428,
+          "by": 458,
+          "thickness": 9
+        }
+      ],
+      "groundTruthWalls": [
+        {
+          "id": "wn1",
+          "ax": 98,
+          "ay": 98,
+          "bx": 758,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "wn2",
+          "ax": 758,
+          "ay": 98,
+          "bx": 758,
+          "by": 578,
+          "thickness": 18
+        },
+        {
+          "id": "wn3",
+          "ax": 758,
+          "ay": 578,
+          "bx": 98,
+          "by": 578,
+          "thickness": 18
+        },
+        {
+          "id": "wn4",
+          "ax": 98,
+          "ay": 578,
+          "bx": 98,
+          "by": 98,
+          "thickness": 18
+        },
+        {
+          "id": "wn5",
+          "ax": 428,
+          "ay": 98,
+          "bx": 428,
+          "by": 458,
+          "thickness": 9
+        }
+      ]
+    },
+    {
+      "id": "apt-2bed-rotated",
+      "file": "apt-2bed-rotated.png",
+      "name": "Two-bedroom apartment (scan, rotated 2°)",
+      "description": "Scan noise plus a 2° rotation, so walls are slightly off-axis.",
+      "sourcePlanId": "apt-2bed",
+      "width": 916,
+      "height": 736,
+      "pixelsPerMeter": 60,
+      "wallCount": 10,
+      "groundTruthPieces": [
+        {
+          "id": "w_ext_n-1",
+          "ax": 107.6,
+          "ay": 85.6,
+          "bx": 269.5,
+          "by": 91.3,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_n-2",
+          "ax": 377.5,
+          "ay": 95,
+          "bx": 827.2,
+          "by": 110.7,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_e-1",
+          "ax": 827.2,
+          "ay": 110.7,
+          "bx": 819.9,
+          "by": 320.6,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_e-2",
+          "ax": 815.7,
+          "ay": 440.5,
+          "bx": 808.4,
+          "by": 650.4,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_s-1",
+          "ax": 808.4,
+          "ay": 650.4,
+          "bx": 262.7,
+          "by": 631.3,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_s-2",
+          "ax": 202.7,
+          "ay": 629.3,
+          "bx": 88.8,
+          "by": 625.3,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_w-1",
+          "ax": 88.8,
+          "ay": 625.3,
+          "bx": 98.5,
+          "by": 346.4,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_w-2",
+          "ax": 101.7,
+          "ay": 256.5,
+          "bx": 107.6,
+          "by": 85.6,
+          "thickness": 18
+        },
+        {
+          "id": "w_int_v1-1",
+          "ax": 497.4,
+          "ay": 99.2,
+          "bx": 488.9,
+          "by": 342.1,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_v1-2",
+          "ax": 487,
+          "ay": 396,
+          "bx": 484.8,
+          "by": 459,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_h1-1",
+          "ax": 488,
+          "ay": 369,
+          "bx": 817.8,
+          "by": 380.6,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_k1-1",
+          "ax": 95.7,
+          "ay": 427.4,
+          "bx": 212.6,
+          "by": 431.5,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_k1-2",
+          "ax": 266.6,
+          "ay": 433.4,
+          "bx": 335.6,
+          "by": 435.8,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_k2-1",
+          "ax": 335.6,
+          "ay": 435.8,
+          "bx": 328.7,
+          "by": 633.6,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_b1-1",
+          "ax": 483.4,
+          "ay": 501,
+          "bx": 549.3,
+          "by": 503.3,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_b1-2",
+          "ax": 597.3,
+          "ay": 504.9,
+          "bx": 663.3,
+          "by": 507.2,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_b2-1",
+          "ax": 663.3,
+          "ay": 507.2,
+          "bx": 658.4,
+          "by": 645.2,
+          "thickness": 9
+        }
+      ],
+      "groundTruthWalls": [
+        {
+          "id": "w_ext_n",
+          "ax": 107.6,
+          "ay": 85.6,
+          "bx": 827.2,
+          "by": 110.7,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_e",
+          "ax": 827.2,
+          "ay": 110.7,
+          "bx": 808.4,
+          "by": 650.4,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_s",
+          "ax": 808.4,
+          "ay": 650.4,
+          "bx": 88.8,
+          "by": 625.3,
+          "thickness": 18
+        },
+        {
+          "id": "w_ext_w",
+          "ax": 88.8,
+          "ay": 625.3,
+          "bx": 107.6,
+          "by": 85.6,
+          "thickness": 18
+        },
+        {
+          "id": "w_int_v1",
+          "ax": 497.4,
+          "ay": 99.2,
+          "bx": 484.8,
+          "by": 459,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_h1",
+          "ax": 488,
+          "ay": 369,
+          "bx": 817.8,
+          "by": 380.6,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_k1",
+          "ax": 95.7,
+          "ay": 427.4,
+          "bx": 335.6,
+          "by": 435.8,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_k2",
+          "ax": 335.6,
+          "ay": 435.8,
+          "bx": 328.7,
+          "by": 633.6,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_b1",
+          "ax": 483.4,
+          "ay": 501,
+          "bx": 663.3,
+          "by": 507.2,
+          "thickness": 9
+        },
+        {
+          "id": "w_int_b2",
+          "ax": 663.3,
+          "ay": 507.2,
+          "bx": 658.4,
+          "by": 645.2,
+          "thickness": 9
+        }
+      ]
+    }
+  ]
+}

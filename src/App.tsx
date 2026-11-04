@@ -3,76 +3,97 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { Header, MainTab } from './components/Header';
+import React, { useEffect, useState } from 'react';
+import { AppShell, type Screen } from './components/AppShell';
+import { Overview } from './components/Overview';
 import { OpenGLCanvas } from './components/OpenGLCanvas';
 import { CVVisualizer } from './components/CVVisualizer';
+import { ImagePipelineLab } from './components/ImagePipelineLab';
 import { CGAlgorithmsLab } from './components/CGAlgorithmsLab';
 import { CppRepoExplorer } from './components/CppRepoExplorer';
 import { MilestoneTracker } from './components/MilestoneTracker';
 import { SAMPLE_FLOORPLANS } from './data/sampleFloorplans';
-import { FloorPlanDataset, WallSegment2D } from './types/floorplan';
+import { FloorPlanDataset, Opening2D, WallSegment2D } from './types/floorplan';
+import { autosavePlan, loadAutosavedPlan } from './data/planStorage';
+import { pruneOpenings } from './utils/openings';
+import { useTheme } from './theme';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<MainTab>('viewer3d');
-  const [currentFloorplan, setCurrentFloorplan] = useState<FloorPlanDataset>(SAMPLE_FLOORPLANS[0]);
-  const [walls, setWalls] = useState<WallSegment2D[]>(SAMPLE_FLOORPLANS[0].walls);
+  const [theme, setTheme] = useTheme();
+  const [screen, setScreen] = useState<Screen>('overview');
+  // The one current plan (walls, doors and windows, rooms): every screen reads it, edits replace it,
+  // and it is autosaved in this browser so a reload comes back to it.
+  const [plan, setPlan] = useState<FloorPlanDataset>(() => loadAutosavedPlan(SAMPLE_FLOORPLANS) ?? SAMPLE_FLOORPLANS[0]);
   const [wallHeight, setWallHeight] = useState<number>(2.8);
   const [wallThickness, setWallThickness] = useState<number>(0.22);
   const [showFurniture, setShowFurniture] = useState<boolean>(true);
   const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
 
-  // Sync walls when floorplan changes
+  useEffect(() => {
+    const timer = window.setTimeout(() => autosavePlan(plan), 400);
+    return () => window.clearTimeout(timer);
+  }, [plan]);
+
   const handleSelectFloorplan = (fp: FloorPlanDataset) => {
-    setCurrentFloorplan(fp);
-    setWalls(fp.walls);
+    setPlan(fp);
     setSelectedWallId(null);
   };
+  // A deleted wall takes its doors and windows with it.
+  const setWalls = (walls: WallSegment2D[]) => setPlan((p) => ({ ...p, walls, openings: pruneOpenings(p.openings, walls) }));
+  const setOpenings = (openings: Opening2D[]) => setPlan((p) => ({ ...p, openings }));
 
   return (
-    <div className="w-screen h-screen flex flex-col bg-slate-950 font-sans text-slate-100 overflow-hidden select-none">
-      <Header
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        currentFloorplan={currentFloorplan}
-        onSelectFloorplan={handleSelectFloorplan}
-        wallHeight={wallHeight}
-        onChangeWallHeight={setWallHeight}
-        wallThickness={wallThickness}
-        onChangeWallThickness={setWallThickness}
-        showFurniture={showFurniture}
-        onToggleFurniture={() => setShowFurniture((prev) => !prev)}
-      />
+    <AppShell
+      screen={screen}
+      onNavigate={setScreen}
+      plan={plan}
+      onSelectPlan={handleSelectFloorplan}
+      theme={theme}
+      onChangeTheme={setTheme}
+    >
+      {screen === 'overview' && <Overview plan={plan} onNavigate={setScreen} />}
 
-      <main className="flex-1 p-3 overflow-hidden relative">
-        {activeTab === 'viewer3d' && (
-          <OpenGLCanvas
-            floorplan={currentFloorplan}
-            walls={walls}
-            wallHeight={wallHeight}
-            wallThickness={wallThickness}
-            showFurniture={showFurniture}
-            selectedWallId={selectedWallId}
-            onSelectWall={setSelectedWallId}
-          />
-        )}
+      {screen === 'viewer3d' && (
+        <OpenGLCanvas
+          floorplan={plan}
+          walls={plan.walls}
+          wallHeight={wallHeight}
+          onChangeWallHeight={setWallHeight}
+          wallThickness={wallThickness}
+          onChangeWallThickness={setWallThickness}
+          showFurniture={showFurniture}
+          onToggleFurniture={() => setShowFurniture((prev) => !prev)}
+          selectedWallId={selectedWallId}
+          onSelectWall={setSelectedWallId}
+          theme={theme}
+        />
+      )}
 
-        {activeTab === 'cvPipeline' && (
-          <CVVisualizer
-            floorplan={currentFloorplan}
-            walls={walls}
-            onUpdateWalls={setWalls}
-            selectedWallId={selectedWallId}
-            onSelectWall={setSelectedWallId}
-          />
-        )}
+      {screen === 'imageLab' && (
+        <ImagePipelineLab
+          onOpenIn3D={(plan) => {
+            handleSelectFloorplan(plan);
+            setScreen('viewer3d');
+          }}
+        />
+      )}
 
-        {activeTab === 'cgLab' && <CGAlgorithmsLab />}
+      {screen === 'cvPipeline' && (
+        <CVVisualizer
+          floorplan={plan}
+          walls={plan.walls}
+          onUpdateWalls={setWalls}
+          onUpdateOpenings={setOpenings}
+          selectedWallId={selectedWallId}
+          onSelectWall={setSelectedWallId}
+        />
+      )}
 
-        {activeTab === 'cppRepo' && <CppRepoExplorer />}
+      {screen === 'cgLab' && <CGAlgorithmsLab />}
 
-        {activeTab === 'milestones' && <MilestoneTracker />}
-      </main>
-    </div>
+      {screen === 'cppRepo' && <CppRepoExplorer />}
+
+      {screen === 'milestones' && <MilestoneTracker />}
+    </AppShell>
   );
 }

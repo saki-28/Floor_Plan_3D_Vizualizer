@@ -6,3 +6,18 @@ coverage/
 *.log
 .env*
 !.env.example
+.taste-skill/
+# Datasets, labels, evaluation results and trained models (root folder only, not src/data)
+/data/
+
+# Training: generated Kaggle bundle and Python caches
+training/kaggle/build/
+__pycache__/
+
+# AI agent and editor tooling
+.agents/
+.claude/
+skills-lock.json
+
+# Research papers (third-party PDFs, kept locally)
+ICG Research/

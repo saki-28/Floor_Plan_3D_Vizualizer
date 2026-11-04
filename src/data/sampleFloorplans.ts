@@ -13,22 +13,31 @@ export const SAMPLE_FLOORPLANS: FloorPlanDataset[] = [
     v0: 300,
     walls: [
       // Outer boundary (12m x 9m)
-      { id: 'w_ext_n', name: 'North Exterior Wall', start: { x: -6.0, z: -4.5 }, end: { x: 6.0, z: -4.5 }, thickness: 0.3, height: 2.8, hasWindow: true, windowPosition: 0.3, windowWidth: 1.8, windowSillHeight: 0.9, windowHeight: 1.4 },
-      { id: 'w_ext_e', name: 'East Exterior Wall', start: { x: 6.0, z: -4.5 }, end: { x: 6.0, z: 4.5 }, thickness: 0.3, height: 2.8, hasWindow: true, windowPosition: 0.5, windowWidth: 2.0, windowSillHeight: 0.9, windowHeight: 1.4 },
-      { id: 'w_ext_s', name: 'South Exterior Wall', start: { x: 6.0, z: 4.5 }, end: { x: -6.0, z: 4.5 }, thickness: 0.3, height: 2.8, hasDoor: true, doorPosition: 0.8, doorWidth: 1.0 },
-      { id: 'w_ext_w', name: 'West Exterior Wall', start: { x: -6.0, z: 4.5 }, end: { x: -6.0, z: -4.5 }, thickness: 0.3, height: 2.8, hasWindow: true, windowPosition: 0.6, windowWidth: 1.5, windowSillHeight: 0.9, windowHeight: 1.4 },
+      { id: 'w_ext_n', name: 'North Exterior Wall', start: { x: -6.0, z: -4.5 }, end: { x: 6.0, z: -4.5 }, thickness: 0.3, height: 2.8},
+      { id: 'w_ext_e', name: 'East Exterior Wall', start: { x: 6.0, z: -4.5 }, end: { x: 6.0, z: 4.5 }, thickness: 0.3, height: 2.8},
+      { id: 'w_ext_s', name: 'South Exterior Wall', start: { x: 6.0, z: 4.5 }, end: { x: -6.0, z: 4.5 }, thickness: 0.3, height: 2.8},
+      { id: 'w_ext_w', name: 'West Exterior Wall', start: { x: -6.0, z: 4.5 }, end: { x: -6.0, z: -4.5 }, thickness: 0.3, height: 2.8},
 
       // Interior dividing walls
       // Vertical divider separating living (west) from bedrooms (east)
-      { id: 'w_int_v1', name: 'Living/Bedrooms Divider', start: { x: 0.5, z: -4.5 }, end: { x: 0.5, z: 1.5 }, thickness: 0.15, height: 2.8, hasDoor: true, doorPosition: 0.75, doorWidth: 0.9 },
+      { id: 'w_int_v1', name: 'Living/Bedrooms Divider', start: { x: 0.5, z: -4.5 }, end: { x: 0.5, z: 1.5 }, thickness: 0.15, height: 2.8},
       // Horizontal divider separating Master Bed (north) from Bedroom 2 (south)
       { id: 'w_int_h1', name: 'Bedrooms Divider', start: { x: 0.5, z: 0.0 }, end: { x: 6.0, z: 0.0 }, thickness: 0.15, height: 2.8 },
       // Kitchen enclosure in south-west
-      { id: 'w_int_k1', name: 'Kitchen Wall', start: { x: -6.0, z: 1.2 }, end: { x: -2.0, z: 1.2 }, thickness: 0.15, height: 2.8, hasDoor: true, doorPosition: 0.6, doorWidth: 0.9 },
+      { id: 'w_int_k1', name: 'Kitchen Wall', start: { x: -6.0, z: 1.2 }, end: { x: -2.0, z: 1.2 }, thickness: 0.15, height: 2.8},
       { id: 'w_int_k2', name: 'Kitchen East Wall', start: { x: -2.0, z: 1.2 }, end: { x: -2.0, z: 4.5 }, thickness: 0.15, height: 2.8 },
       // Bathroom enclosure
-      { id: 'w_int_b1', name: 'Bathroom North Wall', start: { x: 0.5, z: 2.2 }, end: { x: 3.5, z: 2.2 }, thickness: 0.15, height: 2.8, hasDoor: true, doorPosition: 0.5, doorWidth: 0.8 },
+      { id: 'w_int_b1', name: 'Bathroom North Wall', start: { x: 0.5, z: 2.2 }, end: { x: 3.5, z: 2.2 }, thickness: 0.15, height: 2.8},
       { id: 'w_int_b2', name: 'Bathroom West Wall', start: { x: 3.5, z: 2.2 }, end: { x: 3.5, z: 4.5 }, thickness: 0.15, height: 2.8 },
+    ],
+    openings: [
+      { id: 'window-1', kind: 'window', wallId: 'w_ext_n', position: 0.3, width: 1.8, sill: 0.9, height: 1.4 },
+      { id: 'window-2', kind: 'window', wallId: 'w_ext_e', position: 0.5, width: 2.0, sill: 0.9, height: 1.4 },
+      { id: 'door-1', kind: 'door', wallId: 'w_ext_s', position: 0.8, width: 1.0, sill: 0, height: 2.1 },
+      { id: 'window-3', kind: 'window', wallId: 'w_ext_w', position: 0.6, width: 1.5, sill: 0.9, height: 1.4 },
+      { id: 'door-2', kind: 'door', wallId: 'w_int_v1', position: 0.75, width: 0.9, sill: 0, height: 2.1 },
+      { id: 'door-3', kind: 'door', wallId: 'w_int_k1', position: 0.6, width: 0.9, sill: 0, height: 2.1 },
+      { id: 'door-4', kind: 'door', wallId: 'w_int_b1', position: 0.5, width: 0.8, sill: 0, height: 2.1 },
     ],
     rooms: [
       {
@@ -50,7 +59,7 @@ export const SAMPLE_FLOORPLANS: FloorPlanDataset[] = [
       {
         id: 'r_bed2',
         name: 'Guest Bedroom',
-        color: '#8b5cf6',
+        color: '#b0788e',
         corners: [{ x: 0.5, z: 0.0 }, { x: 6.0, z: 0.0 }, { x: 6.0, z: 4.5 }, { x: 3.5, z: 4.5 }, { x: 3.5, z: 2.2 }, { x: 0.5, z: 2.2 }],
         areaSqM: 18.2,
         type: 'bedroom',
@@ -90,13 +99,19 @@ export const SAMPLE_FLOORPLANS: FloorPlanDataset[] = [
     u0: 300,
     v0: 300,
     walls: [
-      { id: 'w1', name: 'North Wall', start: { x: -4.0, z: -4.0 }, end: { x: 4.0, z: -4.0 }, thickness: 0.25, height: 2.7, hasWindow: true, windowPosition: 0.5, windowWidth: 2.4, windowSillHeight: 0.8, windowHeight: 1.5 },
+      { id: 'w1', name: 'North Wall', start: { x: -4.0, z: -4.0 }, end: { x: 4.0, z: -4.0 }, thickness: 0.25, height: 2.7},
       { id: 'w2', name: 'East Wall', start: { x: 4.0, z: -4.0 }, end: { x: 4.0, z: 4.0 }, thickness: 0.25, height: 2.7 },
-      { id: 'w3', name: 'South Wall', start: { x: 4.0, z: 4.0 }, end: { x: -4.0, z: 4.0 }, thickness: 0.25, height: 2.7, hasDoor: true, doorPosition: 0.3, doorWidth: 1.0 },
-      { id: 'w4', name: 'West Wall', start: { x: -4.0, z: 4.0 }, end: { x: -4.0, z: -4.0 }, thickness: 0.25, height: 2.7, hasWindow: true, windowPosition: 0.7, windowWidth: 1.6, windowSillHeight: 0.8, windowHeight: 1.5 },
+      { id: 'w3', name: 'South Wall', start: { x: 4.0, z: 4.0 }, end: { x: -4.0, z: 4.0 }, thickness: 0.25, height: 2.7},
+      { id: 'w4', name: 'West Wall', start: { x: -4.0, z: 4.0 }, end: { x: -4.0, z: -4.0 }, thickness: 0.25, height: 2.7},
       // Enclosed bathroom corner
-      { id: 'w5', name: 'Bathroom Partition 1', start: { x: 1.5, z: 4.0 }, end: { x: 1.5, z: 1.8 }, thickness: 0.15, height: 2.7, hasDoor: true, doorPosition: 0.5, doorWidth: 0.8 },
+      { id: 'w5', name: 'Bathroom Partition 1', start: { x: 1.5, z: 4.0 }, end: { x: 1.5, z: 1.8 }, thickness: 0.15, height: 2.7},
       { id: 'w6', name: 'Bathroom Partition 2', start: { x: 1.5, z: 1.8 }, end: { x: 4.0, z: 1.8 }, thickness: 0.15, height: 2.7 },
+    ],
+    openings: [
+      { id: 'window-1', kind: 'window', wallId: 'w1', position: 0.5, width: 2.4, sill: 0.8, height: 1.5 },
+      { id: 'door-1', kind: 'door', wallId: 'w3', position: 0.3, width: 1.0, sill: 0, height: 2.1 },
+      { id: 'window-2', kind: 'window', wallId: 'w4', position: 0.7, width: 1.6, sill: 0.8, height: 1.5 },
+      { id: 'door-2', kind: 'door', wallId: 'w5', position: 0.5, width: 0.8, sill: 0, height: 2.1 },
     ],
     rooms: [
       {
@@ -132,14 +147,21 @@ export const SAMPLE_FLOORPLANS: FloorPlanDataset[] = [
     u0: 400,
     v0: 350,
     walls: [
-      { id: 'wl1', start: { x: -6.0, z: -5.0 }, end: { x: 1.0, z: -5.0 }, thickness: 0.3, height: 3.0, hasWindow: true, windowPosition: 0.5, windowWidth: 2.0, windowSillHeight: 1.0, windowHeight: 1.5 },
+      { id: 'wl1', start: { x: -6.0, z: -5.0 }, end: { x: 1.0, z: -5.0 }, thickness: 0.3, height: 3.0},
       { id: 'wl2', start: { x: 1.0, z: -5.0 }, end: { x: 1.0, z: 0.0 }, thickness: 0.3, height: 3.0 },
-      { id: 'wl3', start: { x: 1.0, z: 0.0 }, end: { x: 6.0, z: 0.0 }, thickness: 0.3, height: 3.0, hasWindow: true, windowPosition: 0.5, windowWidth: 1.8, windowSillHeight: 1.0, windowHeight: 1.5 },
-      { id: 'wl4', start: { x: 6.0, z: 0.0 }, end: { x: 6.0, z: 5.0 }, thickness: 0.3, height: 3.0, hasWindow: true, windowPosition: 0.5, windowWidth: 2.2, windowSillHeight: 1.0, windowHeight: 1.5 },
-      { id: 'wl5', start: { x: 6.0, z: 5.0 }, end: { x: -1.0, z: 5.0 }, thickness: 0.3, height: 3.0, hasDoor: true, doorPosition: 0.5, doorWidth: 1.1 },
+      { id: 'wl3', start: { x: 1.0, z: 0.0 }, end: { x: 6.0, z: 0.0 }, thickness: 0.3, height: 3.0},
+      { id: 'wl4', start: { x: 6.0, z: 0.0 }, end: { x: 6.0, z: 5.0 }, thickness: 0.3, height: 3.0},
+      { id: 'wl5', start: { x: 6.0, z: 5.0 }, end: { x: -1.0, z: 5.0 }, thickness: 0.3, height: 3.0},
       { id: 'wl6', start: { x: -1.0, z: 5.0 }, end: { x: -1.0, z: 1.0 }, thickness: 0.3, height: 3.0 },
       { id: 'wl7', start: { x: -1.0, z: 1.0 }, end: { x: -6.0, z: 1.0 }, thickness: 0.3, height: 3.0 },
-      { id: 'wl8', start: { x: -6.0, z: 1.0 }, end: { x: -6.0, z: -5.0 }, thickness: 0.3, height: 3.0, hasWindow: true, windowPosition: 0.4, windowWidth: 1.6, windowSillHeight: 1.0, windowHeight: 1.5 },
+      { id: 'wl8', start: { x: -6.0, z: 1.0 }, end: { x: -6.0, z: -5.0 }, thickness: 0.3, height: 3.0},
+    ],
+    openings: [
+      { id: 'window-1', kind: 'window', wallId: 'wl1', position: 0.5, width: 2.0, sill: 1.0, height: 1.5 },
+      { id: 'window-2', kind: 'window', wallId: 'wl3', position: 0.5, width: 1.8, sill: 1.0, height: 1.5 },
+      { id: 'window-3', kind: 'window', wallId: 'wl4', position: 0.5, width: 2.2, sill: 1.0, height: 1.5 },
+      { id: 'door-1', kind: 'door', wallId: 'wl5', position: 0.5, width: 1.1, sill: 0, height: 2.1 },
+      { id: 'window-4', kind: 'window', wallId: 'wl8', position: 0.4, width: 1.6, sill: 1.0, height: 1.5 },
     ],
     rooms: [
       {
@@ -171,14 +193,20 @@ export const SAMPLE_FLOORPLANS: FloorPlanDataset[] = [
     u0: 400,
     v0: 300,
     walls: [
-      { id: 'wn1', name: 'Exterior North', start: { x: -5.5, z: -4.0 }, end: { x: 5.5, z: -4.0 }, thickness: 0.3, height: 2.8, hasWindow: true, windowPosition: 0.4, windowWidth: 2.0, windowSillHeight: 0.9, windowHeight: 1.4 },
+      { id: 'wn1', name: 'Exterior North', start: { x: -5.5, z: -4.0 }, end: { x: 5.5, z: -4.0 }, thickness: 0.3, height: 2.8},
       { id: 'wn2', name: 'Exterior East', start: { x: 5.5, z: -4.0 }, end: { x: 5.5, z: 4.0 }, thickness: 0.3, height: 2.8 },
-      { id: 'wn3', name: 'Exterior South', start: { x: 5.5, z: 4.0 }, end: { x: -5.5, z: 4.0 }, thickness: 0.3, height: 2.8, hasDoor: true, doorPosition: 0.25, doorWidth: 1.0 },
-      { id: 'wn4', name: 'Exterior West', start: { x: -5.5, z: 4.0 }, end: { x: -5.5, z: -4.0 }, thickness: 0.3, height: 2.8, hasWindow: true, windowPosition: 0.5, windowWidth: 1.6, windowSillHeight: 0.9, windowHeight: 1.4 },
-      { id: 'wn5', name: 'Partition Wall', start: { x: 0.0, z: -4.0 }, end: { x: 0.0, z: 2.0 }, thickness: 0.15, height: 2.8, hasDoor: true, doorPosition: 0.8, doorWidth: 0.9 },
+      { id: 'wn3', name: 'Exterior South', start: { x: 5.5, z: 4.0 }, end: { x: -5.5, z: 4.0 }, thickness: 0.3, height: 2.8},
+      { id: 'wn4', name: 'Exterior West', start: { x: -5.5, z: 4.0 }, end: { x: -5.5, z: -4.0 }, thickness: 0.3, height: 2.8},
+      { id: 'wn5', name: 'Partition Wall', start: { x: 0.0, z: -4.0 }, end: { x: 0.0, z: 2.0 }, thickness: 0.15, height: 2.8},
+    ],
+    openings: [
+      { id: 'window-1', kind: 'window', wallId: 'wn1', position: 0.4, width: 2.0, sill: 0.9, height: 1.4 },
+      { id: 'door-1', kind: 'door', wallId: 'wn3', position: 0.25, width: 1.0, sill: 0, height: 2.1 },
+      { id: 'window-2', kind: 'window', wallId: 'wn4', position: 0.5, width: 1.6, sill: 0.9, height: 1.4 },
+      { id: 'door-2', kind: 'door', wallId: 'wn5', position: 0.8, width: 0.9, sill: 0, height: 2.1 },
     ],
     rooms: [
-      { id: 'rn1', name: 'East Wing', color: '#6366f1', corners: [{ x: 0, z: -4.0 }, { x: 5.5, z: -4.0 }, { x: 5.5, z: 4.0 }, { x: 0, z: 4.0 }], areaSqM: 44.0, type: 'living' },
+      { id: 'rn1', name: 'East Wing', color: '#5b8fb9', corners: [{ x: 0, z: -4.0 }, { x: 5.5, z: -4.0 }, { x: 5.5, z: 4.0 }, { x: 0, z: 4.0 }], areaSqM: 44.0, type: 'living' },
       { id: 'rn2', name: 'West Wing', color: '#14b8a6', corners: [{ x: -5.5, z: -4.0 }, { x: 0, z: -4.0 }, { x: 0, z: 4.0 }, { x: -5.5, z: 4.0 }], areaSqM: 44.0, type: 'bedroom' },
     ],
     furniture: [

@@ -1,5 +1,7 @@
+import { PageHeader, Tabs } from './ui';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { FloorPlanDataset, VisionStage, VisionStageInfo, WallSegment2D } from '../types/floorplan';
+import { FloorPlanDataset, Opening2D, OpeningKind, VisionStage, VisionStageInfo, WallSegment2D } from '../types/floorplan';
+import { makeOpening, openingsOnWall } from '../utils/openings';
 import {
   Layers,
   ChevronRight,
@@ -22,6 +24,7 @@ interface CVVisualizerProps {
   floorplan: FloorPlanDataset;
   walls: WallSegment2D[];
   onUpdateWalls: (walls: WallSegment2D[]) => void;
+  onUpdateOpenings: (openings: Opening2D[]) => void;
   selectedWallId: string | null;
   onSelectWall: (wallId: string | null) => void;
 }
@@ -117,13 +120,32 @@ const VISION_STAGES: VisionStageInfo[] = [
   },
 ];
 
+/** Edit-mode badges: a green dot for each door, a cyan square for each window. */
+function drawOpeningBadges(context: CanvasRenderingContext2D, openings: Opening2D[], p1x: number, p1y: number, p2x: number, p2y: number) {
+  for (const opening of openings) {
+    const x = p1x + (p2x - p1x) * opening.position;
+    const y = p1y + (p2y - p1y) * opening.position;
+    if (opening.kind === 'door') {
+      context.fillStyle = '#10b981';
+      context.beginPath();
+      context.arc(x, y, 5, 0, Math.PI * 2);
+      context.fill();
+    } else {
+      context.fillStyle = '#06b6d4';
+      context.fillRect(x - 4, y - 4, 8, 8);
+    }
+  }
+}
+
 export const CVVisualizer: React.FC<CVVisualizerProps> = ({
   floorplan,
   walls,
   onUpdateWalls,
+  onUpdateOpenings,
   selectedWallId,
   onSelectWall,
 }) => {
+  const openings = floorplan.openings;
   const [currentStage, setCurrentStage] = useState<VisionStage>(1);
   const [viewMode, setViewMode] = useState<'single' | 'mosaic' | 'log'>('single');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -221,29 +243,22 @@ export const CVVisualizer: React.FC<CVVisualizerProps> = ({
           context.lineTo(p2x, p2y);
           context.stroke();
 
-          // Door arc symbol
-          if (wall.hasDoor) {
-            const doorPos = wall.doorPosition || 0.5;
-            const dx = p2x - p1x;
-            const dy = p2y - p1y;
-            const doorX = p1x + dx * doorPos;
-            const doorY = p1y + dy * doorPos;
-            context.beginPath();
-            context.arc(doorX, doorY, 18, 0, Math.PI / 2);
-            context.strokeStyle = '#3b82f6';
-            context.lineWidth = 1.5;
-            context.stroke();
-          }
-
-          // Window symbol
-          if (wall.hasWindow) {
-            const winPos = wall.windowPosition || 0.5;
-            const dx = p2x - p1x;
-            const dy = p2y - p1y;
-            const winX = p1x + dx * winPos;
-            const winY = p1y + dy * winPos;
-            context.fillStyle = '#38bdf8';
-            context.fillRect(winX - 10, winY - 3, 20, 6);
+          // Door arc and window symbols (styles restored so the next wall keeps its own)
+          for (const opening of openingsOnWall(openings, wall.id)) {
+            const x = p1x + (p2x - p1x) * opening.position;
+            const y = p1y + (p2y - p1y) * opening.position;
+            context.save();
+            if (opening.kind === 'door') {
+              context.beginPath();
+              context.arc(x, y, 18, 0, Math.PI / 2);
+              context.strokeStyle = '#3b82f6';
+              context.lineWidth = 1.5;
+              context.stroke();
+            } else {
+              context.fillStyle = '#38bdf8';
+              context.fillRect(x - 10, y - 3, 20, 6);
+            }
+            context.restore();
           }
         }
 
@@ -456,26 +471,7 @@ export const CVVisualizer: React.FC<CVVisualizerProps> = ({
           context.fill();
 
           // Door / Window badges
-          if (wall.hasDoor) {
-            const doorPos = wall.doorPosition || 0.5;
-            const dx = p2x - p1x;
-            const dy = p2y - p1y;
-            const doorX = p1x + dx * doorPos;
-            const doorY = p1y + dy * doorPos;
-            context.fillStyle = '#10b981';
-            context.beginPath();
-            context.arc(doorX, doorY, 5, 0, Math.PI * 2);
-            context.fill();
-          }
-          if (wall.hasWindow) {
-            const winPos = wall.windowPosition || 0.5;
-            const dx = p2x - p1x;
-            const dy = p2y - p1y;
-            const winX = p1x + dx * winPos;
-            const winY = p1y + dy * winPos;
-            context.fillStyle = '#06b6d4';
-            context.fillRect(winX - 4, winY - 4, 8, 8);
-          }
+          drawOpeningBadges(context, openingsOnWall(openings, wall.id), p1x, p1y, p2x, p2y);
         }
 
         // Stage 7: Final vectorized result with colour-coded overlay
@@ -571,20 +567,7 @@ export const CVVisualizer: React.FC<CVVisualizerProps> = ({
           }
 
           // Door / Window badges
-          if (wall.hasDoor) {
-            const doorPos = wall.doorPosition || 0.5;
-            const dx = p2x - p1x, dy = p2y - p1y;
-            context.fillStyle = '#10b981';
-            context.beginPath();
-            context.arc(p1x + dx * doorPos, p1y + dy * doorPos, 5, 0, Math.PI * 2);
-            context.fill();
-          }
-          if (wall.hasWindow) {
-            const winPos = wall.windowPosition || 0.5;
-            const dx = p2x - p1x, dy = p2y - p1y;
-            context.fillStyle = '#06b6d4';
-            context.fillRect(p1x + dx * winPos - 4, p1y + dy * winPos - 4, 8, 8);
-          }
+          drawOpeningBadges(context, openingsOnWall(openings, wall.id), p1x, p1y, p2x, p2y);
         });
 
         // Stage 7 legend
@@ -828,15 +811,14 @@ export const CVVisualizer: React.FC<CVVisualizerProps> = ({
 
   const selectedWall = walls.find((w) => w.id === selectedWallId);
 
-  const toggleWallDoor = (wallId: string) => {
-    onUpdateWalls(
-      walls.map((w) => (w.id === wallId ? { ...w, hasDoor: !w.hasDoor, doorPosition: 0.5 } : w))
-    );
-  };
+  const wallHas = (wallId: string, kind: OpeningKind) => openings.some((o) => o.wallId === wallId && o.kind === kind);
 
-  const toggleWallWindow = (wallId: string) => {
-    onUpdateWalls(
-      walls.map((w) => (w.id === wallId ? { ...w, hasWindow: !w.hasWindow, windowPosition: 0.5 } : w))
+  // Adds one door (or window) at the middle of the wall, or removes the wall's doors (or windows).
+  const toggleOpening = (wallId: string, kind: OpeningKind) => {
+    onUpdateOpenings(
+      wallHas(wallId, kind)
+        ? openings.filter((o) => !(o.wallId === wallId && o.kind === kind))
+        : [...openings, makeOpening(openings, kind, wallId)],
     );
   };
 
@@ -860,70 +842,56 @@ export const CVVisualizer: React.FC<CVVisualizerProps> = ({
   };
 
   return (
-    <div className="w-full h-full flex flex-col bg-slate-950 text-slate-100 overflow-hidden rounded-xl border border-slate-800">
-      {/* Stage Stepper Header */}
-      <div className="bg-slate-900 border-b border-slate-800 p-2.5 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-1 sm:pb-0">
-          {VISION_STAGES.map((stage) => {
-            const isActive = stage.id === currentStage;
-            return (
-              <button
-                key={stage.id}
-                onClick={() => { setCurrentStage(stage.id); setViewMode('single'); }}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg whitespace-nowrap transition flex items-center gap-1.5 ${
-                  isActive && viewMode === 'single'
-                    ? 'bg-blue-600 text-white shadow-md font-semibold'
-                    : 'bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white'
-                }`}
-              >
-                <span>{stage.shortName}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* View mode buttons */}
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => setViewMode('mosaic')}
-            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 ${
-              viewMode === 'mosaic' ? 'bg-violet-600 text-white font-semibold' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-            title="7-tile mosaic view"
-          >
-            <Grid className="w-3.5 h-3.5" /> Mosaic
-          </button>
-          <button
-            onClick={() => setViewMode('log')}
-            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 ${
-              viewMode === 'log' ? 'bg-amber-600 text-white font-semibold' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-            title="Pipeline log"
-          >
-            <BarChart2 className="w-3.5 h-3.5" /> Pipeline Log
-          </button>
-          <button
-            onClick={() => setCurrentStage((prev) => Math.max(1, prev - 1) as VisionStage)}
-            disabled={currentStage === 1}
-            className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-          <span className="text-xs font-mono text-slate-400">{currentStage} / 7</span>
-          <button
-            onClick={() => setCurrentStage((prev) => Math.min(7, prev + 1) as VisionStage)}
-            disabled={currentStage === 7}
-            className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
+    <div className="flex min-h-full flex-col gap-5 lg:h-full">
+      <PageHeader
+        title="Pipeline explainer"
+        description="A simulated walk through the seven planned image steps, drawn from the current plan's walls. The real pipeline runs in Image to plan."
+      />
+      <Tabs
+        label="Pipeline stages"
+        value={viewMode === 'single' ? String(currentStage) : viewMode}
+        onChange={(value) => {
+          if (value === 'mosaic' || value === 'log') {
+            setViewMode(value);
+          } else {
+            setCurrentStage(Number(value) as VisionStage);
+            setViewMode('single');
+          }
+        }}
+        tabs={[
+          ...VISION_STAGES.map((stage) => ({ value: String(stage.id), label: stage.shortName })),
+          { value: 'mosaic', label: 'Mosaic', icon: <Grid className="h-4 w-4" strokeWidth={1.5} /> },
+          { value: 'log', label: 'Log', icon: <BarChart2 className="h-4 w-4" strokeWidth={1.5} /> },
+        ]}
+        trailing={
+          <>
+            <button
+              type="button"
+              aria-label="Previous stage"
+              onClick={() => setCurrentStage((prev) => Math.max(1, prev - 1) as VisionStage)}
+              disabled={currentStage === 1}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span className="num text-[13px] text-muted">{currentStage} of 7</span>
+            <button
+              type="button"
+              aria-label="Next stage"
+              onClick={() => setCurrentStage((prev) => Math.min(7, prev + 1) as VisionStage)}
+              disabled={currentStage === 7}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </>
+        }
+      />
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         {/* Canvas / Mosaic / Log Area */}
-        <div className="flex-1 relative flex items-center justify-center p-3 bg-slate-950/80 overflow-hidden">
+        <div className="flex-1 relative flex items-center justify-center p-3 bg-surface overflow-hidden">
 
           {/* Single stage view */}
           {viewMode === 'single' && (
@@ -936,19 +904,19 @@ export const CVVisualizer: React.FC<CVVisualizerProps> = ({
                 onMouseMove={handleCanvasMouseMove}
                 onMouseUp={handleCanvasMouseUp}
                 onMouseLeave={handleCanvasMouseUp}
-                className={`max-w-full max-h-full object-contain rounded-lg border border-slate-800 shadow-xl ${
+                className={`max-w-full max-h-full object-contain rounded-lg border border-line  ${
                   currentStage === 7 ? 'cursor-crosshair' : 'cursor-default'
                 }`}
               />
               {currentStage === 7 && (
-                <div className="absolute top-5 right-5 bg-slate-900/90 backdrop-blur-md p-2 rounded-lg border border-slate-700 shadow-lg flex items-center gap-2">
+                <div className="absolute top-5 right-5 bg-raised  p-2 rounded-lg border border-line  flex items-center gap-2">
                   <button
                     onClick={addNewWall}
-                    className="px-2.5 py-1 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white rounded-md flex items-center gap-1.5 shadow"
+                    className="px-2.5 py-1 text-xs font-semibold bg-primary hover:bg-positive text-on-primary rounded-md flex items-center gap-1.5 "
                   >
                     <Plus className="w-3.5 h-3.5" /> Add Wall
                   </button>
-                  <span className="text-[11px] text-slate-400">Drag blue/green nodes to adjust</span>
+                  <span className="text-xs text-muted">Drag blue/green nodes to adjust</span>
                 </div>
               )}
             </>
@@ -957,7 +925,7 @@ export const CVVisualizer: React.FC<CVVisualizerProps> = ({
           {/* 7-tile mosaic */}
           {viewMode === 'mosaic' && (
             <div className="flex flex-col items-center w-full h-full">
-              <div className="text-xs text-violet-400 font-semibold mb-2 flex items-center gap-2">
+              <div className="text-xs text-accent font-semibold mb-2 flex items-center gap-2">
                 <Grid className="w-3.5 h-3.5" />
                 7-Stage Pipeline Mosaic — click a stage tab above to highlight it
               </div>
@@ -965,13 +933,13 @@ export const CVVisualizer: React.FC<CVVisualizerProps> = ({
                 ref={mosaicRef}
                 width={1120}
                 height={540}
-                className="max-w-full max-h-full object-contain rounded-lg border border-violet-900/40 shadow-xl"
+                className="max-w-full max-h-full object-contain rounded-lg border border-line "
               />
-              <div className="mt-2 flex items-center gap-4 text-[10px] font-mono">
+              <div className="mt-2 flex items-center gap-4 text-xs num">
                 {[['#3b82f6','paired centerline'],['#22c55e','kept/merged'],['#eab308','snapped endpoint'],['#f43f5e','discarded']].map(([c,l]) => (
                   <span key={l} className="flex items-center gap-1.5">
                     <span style={{ background: c }} className="inline-block w-3 h-3 rounded-sm" />
-                    <span className="text-slate-400">{l}</span>
+                    <span className="text-muted">{l}</span>
                   </span>
                 ))}
               </div>
@@ -981,47 +949,47 @@ export const CVVisualizer: React.FC<CVVisualizerProps> = ({
           {/* Pipeline Log view */}
           {viewMode === 'log' && (
             <div className="w-full h-full overflow-y-auto px-2">
-              <div className="text-xs text-amber-400 font-semibold mb-3 flex items-center gap-2">
+              <div className="text-xs text-ink font-semibold mb-3 flex items-center gap-2">
                 <BarChart2 className="w-3.5 h-3.5" />
                 PipelineResult Log — per-stage params, counts & timing
-                <span className="ml-auto text-slate-500 font-mono">total: {pipelineLogs.reduce((s, l) => s + l.timingMs, 0)} ms</span>
+                <span className="ml-auto text-muted num">total: {pipelineLogs.reduce((s, l) => s + l.timingMs, 0)} ms</span>
               </div>
               <div className="space-y-2">
                 {pipelineLogs.map((log) => (
                   <div
                     key={log.stageId}
                     onClick={() => { setCurrentStage(log.stageId); setViewMode('single'); }}
-                    className={`p-3 rounded-xl border cursor-pointer transition hover:border-blue-500/60 ${
+                    className={`p-3 rounded-lg border cursor-pointer transition hover:border-line ${
                       currentStage === log.stageId
-                        ? 'border-blue-500/50 bg-blue-950/30'
-                        : 'border-slate-800 bg-slate-900/60'
+                        ? 'border-line bg-accent-soft'
+                        : 'border-line bg-raised'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs font-bold text-slate-200">
+                      <span className="text-xs font-bold text-ink">
                         Stage {log.stageId}: {log.label}
                       </span>
-                      <span className="text-[11px] font-mono text-amber-400 flex items-center gap-1">
+                      <span className="text-xs num text-ink flex items-center gap-1">
                         <Clock className="w-3 h-3" /> {log.timingMs} ms
                       </span>
                     </div>
-                    <div className="text-[11px] text-slate-400 font-mono">
-                      <span className="text-cyan-400">params: </span>{log.params}
+                    <div className="text-xs text-muted num">
+                      <span className="text-accent">params: </span>{log.params}
                     </div>
-                    <div className="text-[11px] text-emerald-400 font-mono mt-0.5">
-                      <span className="text-slate-400">output: </span>{log.counts}
+                    <div className="text-xs text-positive num mt-0.5">
+                      <span className="text-muted">output: </span>{log.counts}
                     </div>
                     {/* Progress bar for timing */}
-                    <div className="mt-1.5 h-1 bg-slate-800 rounded-full overflow-hidden">
+                    <div className="mt-1.5 h-1 bg-active rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-amber-500 rounded-full"
+                        className="h-full bg-warning rounded-full"
                         style={{ width: `${Math.min(100, (log.timingMs / 35) * 100)}%` }}
                       />
                     </div>
                   </div>
                 ))}
               </div>
-              <div className="mt-3 p-3 rounded-xl border border-emerald-900/40 bg-emerald-950/20 text-[11px] text-emerald-300 font-mono">
+              <div className="mt-3 p-3 rounded-lg border border-line bg-positive-soft text-xs text-positive num">
                 Total pipeline: {pipelineLogs.reduce((s, l) => s + l.timingMs, 0)} ms &nbsp;·&nbsp;
                 Final segments: {walls.length} centerlines &nbsp;·&nbsp;
                 Scale: {floorplan.scale} m/px (calibrated)
@@ -1031,95 +999,89 @@ export const CVVisualizer: React.FC<CVVisualizerProps> = ({
         </div>
 
         {/* Explainability Sidebar (Module B requirements) */}
-        <div className="w-full lg:w-96 bg-slate-900/95 border-t lg:border-t-0 lg:border-l border-slate-800 p-4 flex flex-col gap-4 overflow-y-auto">
+        <div className="w-full lg:w-96 bg-raised border-t lg:border-t-0 lg:border-l border-line p-4 flex flex-col gap-4 overflow-y-auto">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="px-2 py-0.5 text-[11px] font-bold rounded bg-blue-500/20 text-blue-400 border border-blue-500/30">
+              <span className="px-2 py-0.5 text-xs font-bold rounded bg-accent-soft text-accent border border-line">
                 STAGE {stageInfo.id}
               </span>
-              <h3 className="font-semibold text-slate-200 text-sm">{stageInfo.title}</h3>
+              <h3 className="font-semibold text-ink text-sm">{stageInfo.title}</h3>
             </div>
-            <p className="text-xs text-slate-400 leading-relaxed mt-2">
+            <p className="text-[13px] text-muted leading-relaxed mt-2">
               {stageInfo.academicRationale}
             </p>
           </div>
 
           {/* Mathematical Principle */}
-          <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-800">
-            <div className="text-[11px] font-semibold text-amber-400 flex items-center gap-1.5 mb-1.5">
+          <div className="bg-surface p-3 rounded-lg border border-line">
+            <div className="text-xs font-semibold text-ink flex items-center gap-1.5 mb-1.5">
               <Info className="w-3.5 h-3.5" /> Mathematical Formulation:
             </div>
-            <div className="font-mono text-xs text-slate-300 break-words bg-slate-900 p-2 rounded border border-slate-800/80">
+            <div className="num text-xs text-ink break-words bg-raised p-2 rounded border border-line">
               {stageInfo.mathExplanation}
             </div>
           </div>
 
           {/* OpenCV C++ Code */}
-          <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-800">
-            <div className="text-[11px] font-semibold text-cyan-400 mb-1.5">
+          <div className="bg-surface p-3 rounded-lg border border-line">
+            <div className="text-xs font-semibold text-accent mb-1.5">
               OpenCV C++ Implementation:
             </div>
-            <pre className="font-mono text-[11px] text-emerald-400 bg-slate-900 p-2 rounded overflow-x-auto border border-slate-800/80 leading-relaxed">
+            <pre className="font-mono text-[13px] text-positive bg-raised p-2 rounded overflow-x-auto border border-line leading-relaxed">
               {stageInfo.opencvFunction}
             </pre>
-            <div className="text-[10px] text-slate-400 mt-1">
+            <div className="text-xs text-muted mt-1">
               Parameters: {stageInfo.parameters}
             </div>
           </div>
 
           {/* Explainable Failure Mode Note */}
-          <div className="bg-amber-950/20 p-3 rounded-lg border border-amber-900/40">
-            <div className="text-[11px] font-semibold text-amber-300 flex items-center gap-1.5 mb-1">
-              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" /> Explainable Vision Consideration:
+          <div className="bg-warning-soft p-3 rounded-lg border border-line">
+            <div className="text-xs font-semibold text-ink flex items-center gap-1.5 mb-1">
+              <AlertTriangle className="w-3.5 h-3.5 text-ink" /> Explainable Vision Consideration:
             </div>
-            <p className="text-[11px] text-amber-200/80 leading-relaxed">
+            <p className="text-[13px] text-ink leading-relaxed">
               Standard floor plans contain dimension annotations, room text, and curved door swing arcs. Without manual verification or morphological opening, these artifact pixels will produce false non-structural wall vectors.
             </p>
           </div>
 
           {/* Selected Wall Inspector (When in Stage 7) */}
           {currentStage === 7 && selectedWall && (
-            <div className="bg-slate-950 p-3 rounded-lg border border-blue-500/40 space-y-2">
+            <div className="bg-surface p-3 rounded-lg border border-line space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-blue-400">
+                <span className="text-xs font-bold text-accent">
                   {selectedWall.name || selectedWall.id}
                 </span>
                 <button
                   onClick={() => deleteWall(selectedWall.id)}
-                  className="text-red-400 hover:text-red-300 p-1"
+                  className="text-negative hover:text-negative p-1"
                   title="Delete Wall"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
 
-              <div className="text-[11px] text-slate-400 font-mono">
+              <div className="text-xs text-muted num">
                 Start: ({selectedWall.start.x.toFixed(2)}m, {selectedWall.start.z.toFixed(2)}m)
                 <br />
                 End: ({selectedWall.end.x.toFixed(2)}m, {selectedWall.end.z.toFixed(2)}m)
               </div>
 
               <div className="flex items-center gap-2 pt-1">
-                <button
-                  onClick={() => toggleWallDoor(selectedWall.id)}
-                  className={`px-2.5 py-1 text-xs rounded font-medium transition ${
-                    selectedWall.hasDoor
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  {selectedWall.hasDoor ? '✓ Door Opening' : '+ Punch Door'}
-                </button>
-                <button
-                  onClick={() => toggleWallWindow(selectedWall.id)}
-                  className={`px-2.5 py-1 text-xs rounded font-medium transition ${
-                    selectedWall.hasWindow
-                      ? 'bg-cyan-600 text-white'
-                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                  }`}
-                >
-                  {selectedWall.hasWindow ? '✓ Window Opening' : '+ Punch Window'}
-                </button>
+                {(['door', 'window'] as const).map((kind) => {
+                  const has = wallHas(selectedWall.id, kind);
+                  return (
+                    <button
+                      key={kind}
+                      onClick={() => toggleOpening(selectedWall.id, kind)}
+                      className={`px-2.5 py-1 text-xs rounded font-medium transition ${
+                        has ? 'bg-primary text-on-primary' : 'bg-active text-ink hover:bg-active'
+                      }`}
+                    >
+                      {has ? `Remove ${kind}` : `Add ${kind}`}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
