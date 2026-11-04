@@ -6,6 +6,7 @@ import {
 } from '../types/floorplan';
 import {
   extrudeWallSegment,
+  extrudeWallWithOpenings,
   generateFloorMesh,
   combineMeshes,
   Mesh3D,
@@ -18,47 +19,65 @@ import {
   worldToScreen,
   snapToFloorGeometry,
   distance2D,
+  downloadOBJ,
   Mat4,
 } from '../utils/geometryEngine';
-import {
-  Eye,
-  Maximize2,
-  Box,
-  Layers,
-  Compass,
-  RotateCcw,
-  Sun,
-  Grid,
-  Ruler,
-  Crosshair,
-  Trash2,
-  Copy,
-  Check,
-  CheckCircle2,
-  Magnet,
-} from 'lucide-react';
+import { Check, Copy, Download, House, Maximize, Pause, Play, RotateCcw, RotateCw, Ruler, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
+import type { Theme } from '../theme';
+import { planLabel } from '../utils/planLabel';
+import { openingsOnWall, wallCuts } from '../utils/openings';
+import { PlanThumbnail } from './PlanThumbnail';
+import { Button, KeyValue, SectionTitle, Segmented, Slider, Switch } from './ui';
 
 interface OpenGLCanvasProps {
   floorplan: FloorPlanDataset;
   walls: WallSegment2D[];
   wallHeight: number;
+  onChangeWallHeight: (height: number) => void;
   wallThickness: number;
+  onChangeWallThickness: (thickness: number) => void;
   showFurniture: boolean;
+  onToggleFurniture: () => void;
   selectedWallId: string | null;
   onSelectWall: (wallId: string | null) => void;
+  theme: Theme;
 }
 
 export type RenderStyle = 'architectural' | 'blueprint' | 'clay';
 export type ViewPreset = 'perspective' | 'top' | 'front' | 'side' | 'isometric';
 
+const VIEW_BUTTONS: { preset: ViewPreset; label: string }[] = [
+  { preset: 'perspective', label: '3D' },
+  { preset: 'top', label: 'Top' },
+  { preset: 'isometric', label: 'Isometric' },
+  { preset: 'front', label: 'Front' },
+];
+
+type CameraPose = { yaw: number; pitch: number; radius: number; target: [number, number, number] };
+
+/** Camera limits and steps for the rotate and zoom controls. */
+const MIN_RADIUS = 1.5;
+const ZOOM_STEP = 1.25; // per click or key press
+const ROTATE_STEP_DEG = 45; // per rotate button
+const KEY_ROTATE_DEG = 15; // per arrow key
+const KEY_TILT_DEG = 5;
+const AUTO_ROTATE_DEG_PER_S = 20;
+
+/** `to` as the equivalent angle nearest `from`, so a move turns the short way round. */
+const nearestAngle = (from: number, to: number) => from + ((((to - from) % 360) + 540) % 360) - 180;
+
 export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   floorplan,
   walls,
   wallHeight,
+  onChangeWallHeight,
   wallThickness,
+  onChangeWallThickness,
   showFurniture,
+  onToggleFurniture,
   selectedWallId,
   onSelectWall,
+  theme,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -66,6 +85,8 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   const [isWireframe, setIsWireframe] = useState(false);
   const [renderMode, setRenderMode] = useState<'shaded' | 'normals' | 'depth'>('shaded');
   const [renderStyle, setRenderStyle] = useState<RenderStyle>('architectural');
+  // The preset the camera is in, until the user orbits away from it.
+  const [activeView, setActiveView] = useState<ViewPreset | null>('perspective');
 
   // Camera state
   const [cameraRadius, setCameraRadius] = useState(16.0);
@@ -235,13 +256,9 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     const gl = glRef.current;
     if (!gl) return;
 
-    // Extrude walls with current height and thickness
+    // Extrude walls with current height and thickness, with their doors and windows cut out
     const wallMeshes: Mesh3D[] = walls.map((w) =>
-      extrudeWallSegment({
-        ...w,
-        height: wallHeight,
-        thickness: wallThickness,
-      })
+      extrudeWallWithOpenings({ ...w, height: wallHeight, thickness: wallThickness }, wallCuts(floorplan.openings, w, wallHeight))
     );
     const combinedWalls = combineMeshes(wallMeshes);
 
@@ -317,8 +334,10 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
       gl.clearColor(0.04, 0.09, 0.18, 1.0);
     } else if (renderStyle === 'clay') {
       gl.clearColor(0.92, 0.93, 0.95, 1.0);
+    } else if (theme === 'dark') {
+      gl.clearColor(0.106, 0.106, 0.106, 1.0); // --raised, dark
     } else {
-      gl.clearColor(0.09, 0.11, 0.15, 1.0);
+      gl.clearColor(0.886, 0.906, 0.918, 1.0); // a step below --raised, so light walls still read
     }
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -414,8 +433,8 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
 
     // Color schemes based on style
     let wallColor: [number, number, number] = [0.88, 0.89, 0.92];
-    let floorColor: [number, number, number] = [0.28, 0.32, 0.38];
-    let furnColor: [number, number, number] = [0.45, 0.55, 0.70];
+    let floorColor: [number, number, number] = theme === 'dark' ? [0.3, 0.31, 0.32] : [0.62, 0.65, 0.67];
+    let furnColor: [number, number, number] = theme === 'dark' ? [0.42, 0.6, 0.66] : [0.33, 0.52, 0.58];
 
     if (renderStyle === 'blueprint') {
       wallColor = [0.15, 0.45, 0.85];
@@ -460,6 +479,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     isWireframe,
     renderMode,
     renderStyle,
+    theme,
     showFurniture,
     measurePointA,
     measurePointB,
@@ -488,50 +508,142 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
       canvas.height = rect.height * window.devicePixelRatio;
     };
     handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    // The canvas also changes size without a window resize (the side panel stacking on narrow screens).
+    const observer = new ResizeObserver(handleResize);
+    if (canvasRef.current) observer.observe(canvasRef.current);
+    return () => observer.disconnect();
   }, []);
 
-  // Preset view setting
-  const applyViewPreset = (preset: ViewPreset) => {
-    switch (preset) {
-      case 'perspective':
-        setIsOrthographic(false);
-        setCameraYaw(-45);
-        setCameraPitch(35);
-        setCameraRadius(18);
-        setCameraTarget([0, 0, 0]);
-        break;
-      case 'top':
-        setIsOrthographic(true);
-        setCameraYaw(-90);
-        setCameraPitch(89);
-        setCameraRadius(22);
-        setCameraTarget([0, 0, 0]);
-        break;
-      case 'front':
-        setIsOrthographic(true);
-        setCameraYaw(-90);
-        setCameraPitch(5);
-        setCameraRadius(20);
-        setCameraTarget([0, wallHeight / 2, 0]);
-        break;
-      case 'side':
-        setIsOrthographic(true);
-        setCameraYaw(0);
-        setCameraPitch(5);
-        setCameraRadius(20);
-        setCameraTarget([0, wallHeight / 2, 0]);
-        break;
-      case 'isometric':
-        setIsOrthographic(true);
-        setCameraYaw(-45);
-        setCameraPitch(35.264);
-        setCameraRadius(22);
-        setCameraTarget([0, 0, 0]);
-        break;
-    }
+  // Camera moves: the model's frame, fitting, eased transitions, zoom and rotation steps, and
+  // turning automatically. Buttons, keys, sliders, double-tap and the preset views all use these.
+  const modelFrame = useMemo(() => {
+    const xs = walls.flatMap((w) => [w.start.x, w.end.x]);
+    const zs = walls.flatMap((w) => [w.start.z, w.end.z]);
+    if (xs.length === 0) return { center: [0, 0, 0] as [number, number, number], halfDiagonal: 5 };
+    const [minX, maxX, minZ, maxZ] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
+    return {
+      center: [(minX + maxX) / 2, 0, (minZ + maxZ) / 2] as [number, number, number],
+      halfDiagonal: Math.hypot(maxX - minX, maxZ - minZ) / 2,
+    };
+  }, [walls]);
+
+  /** The distance at which the whole model fits: the 45° perspective view, or the ±0.45·radius ortho extent. */
+  const fitRadius = (ortho: boolean) => {
+    const reach = Math.hypot(modelFrame.halfDiagonal, wallHeight / 2);
+    return Math.max(4, (ortho ? reach / 0.45 : reach / Math.sin(Math.PI / 8)) * 1.08);
   };
+  const maxRadiusRef = useRef(45);
+  maxRadiusRef.current = fitRadius(false) * 3;
+  const clampR = (radius: number) => Math.max(MIN_RADIUS, Math.min(maxRadiusRef.current, radius));
+  const clampPitch = (pitch: number) => Math.max(5, Math.min(89, pitch));
+
+  const poseRef = useRef<CameraPose>({ yaw: cameraYaw, pitch: cameraPitch, radius: cameraRadius, target: cameraTarget });
+  poseRef.current = { yaw: cameraYaw, pitch: cameraPitch, radius: cameraRadius, target: cameraTarget };
+  const goalRef = useRef<CameraPose | null>(null);
+  const tweenRef = useRef<number | null>(null);
+  const reducedMotion = useMemo(() => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false, []);
+  const [autoRotate, setAutoRotate] = useState(false);
+
+  const stopCameraMotion = () => {
+    if (tweenRef.current !== null) cancelAnimationFrame(tweenRef.current);
+    tweenRef.current = null;
+    goalRef.current = null;
+  };
+  const setPose = (pose: CameraPose) => {
+    setCameraYaw(pose.yaw);
+    setCameraPitch(pose.pitch);
+    setCameraRadius(pose.radius);
+    setCameraTarget(pose.target);
+  };
+  /** Where the camera is going: the end of a running move, so quick repeated clicks add up. */
+  const basePose = () => goalRef.current ?? poseRef.current;
+
+  /** Eases the camera to a new pose (instantly when the system asks for reduced motion). */
+  const animateCamera = (to: Partial<CameraPose>, duration = 350) => {
+    const from = poseRef.current;
+    const goal: CameraPose = { ...basePose(), ...to };
+    stopCameraMotion();
+    if (reducedMotion || duration <= 0) {
+      setPose(goal);
+      return;
+    }
+    goalRef.current = goal;
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const mix = (a: number, b: number) => a + (b - a) * eased;
+      setPose({
+        yaw: mix(from.yaw, goal.yaw),
+        pitch: mix(from.pitch, goal.pitch),
+        radius: mix(from.radius, goal.radius),
+        target: [0, 1, 2].map((i) => mix(from.target[i], goal.target[i])) as [number, number, number],
+      });
+      if (t < 1) {
+        tweenRef.current = requestAnimationFrame(step);
+      } else {
+        tweenRef.current = null;
+        goalRef.current = null;
+      }
+    };
+    tweenRef.current = requestAnimationFrame(step);
+  };
+
+  const zoomBy = (factor: number) => animateCamera({ radius: clampR(basePose().radius / factor) }, 200);
+  const rotateBy = (degrees: number) => {
+    setActiveView(null);
+    animateCamera({ yaw: basePose().yaw + degrees });
+  };
+  const tiltBy = (degrees: number) => {
+    setActiveView(null);
+    animateCamera({ pitch: clampPitch(basePose().pitch + degrees) }, 200);
+  };
+  const fitView = () => animateCamera({ target: modelFrame.center, radius: fitRadius(isOrthographic) });
+  const toggleAutoRotate = (on = !autoRotate) => {
+    stopCameraMotion();
+    if (on) setActiveView(null);
+    setAutoRotate(on);
+  };
+
+  // Turning automatically: a slow turntable until the user turns it off or grabs the model.
+  useEffect(() => {
+    if (!autoRotate) return;
+    let last = performance.now();
+    let frame = requestAnimationFrame(function tick(now) {
+      // Work out the step now: React runs the updater later, after `last` has moved on.
+      const step = (Math.max(0, now - last) / 1000) * AUTO_ROTATE_DEG_PER_S;
+      last = now;
+      setCameraYaw((yaw) => yaw + step);
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [autoRotate]);
+
+  // Preset views, framed to fit the model and eased into place.
+  const applyViewPreset = (preset: ViewPreset, duration = 350) => {
+    setActiveView(preset);
+    setAutoRotate(false);
+    const ortho = preset !== 'perspective';
+    setIsOrthographic(ortho);
+    const radius = fitRadius(ortho);
+    const [cx, , cz] = modelFrame.center;
+    const floor: [number, number, number] = [cx, 0, cz];
+    const midHeight: [number, number, number] = [cx, wallHeight / 2, cz];
+    const poses: Record<ViewPreset, Omit<CameraPose, 'yaw'> & { yaw: number }> = {
+      perspective: { yaw: -45, pitch: 35, radius, target: floor },
+      top: { yaw: -90, pitch: 89, radius, target: floor },
+      front: { yaw: -90, pitch: 5, radius, target: midHeight },
+      side: { yaw: 0, pitch: 5, radius, target: midHeight },
+      isometric: { yaw: -45, pitch: 35.264, radius, target: floor },
+    };
+    const pose = poses[preset];
+    animateCamera({ ...pose, yaw: nearestAngle(poseRef.current.yaw, pose.yaw) }, duration);
+  };
+
+  // A new plan (a sample, or walls from an image) opens framed in the 3D view.
+  useEffect(() => {
+    applyViewPreset('perspective', 0);
+  }, [floorplan.id]);
 
   // Snapping candidates from all walls and room corners
   const snappingCandidates = useMemo<Point2D[]>(() => {
@@ -539,10 +651,10 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     for (const w of walls) {
       pts.push(w.start);
       pts.push(w.end);
-      if (w.hasDoor && w.doorPosition !== undefined) {
-        const dx = w.end.x - w.start.x;
-        const dz = w.end.z - w.start.z;
-        pts.push({ x: w.start.x + dx * w.doorPosition, z: w.start.z + dz * w.doorPosition });
+      // Door centres snap too.
+      for (const o of openingsOnWall(floorplan.openings, w.id)) {
+        if (o.kind !== 'door') continue;
+        pts.push({ x: w.start.x + (w.end.x - w.start.x) * o.position, z: w.start.z + (w.end.z - w.start.z) * o.position });
       }
     }
     for (const r of floorplan.rooms) {
@@ -551,7 +663,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
       }
     }
     return pts;
-  }, [walls, floorplan.rooms]);
+  }, [walls, floorplan.rooms, floorplan.openings]);
 
   // Active measurement values
   const activeMeasureTarget = measurePointB || (measurePointA ? hoverFloorPoint : null);
@@ -563,25 +675,59 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   const deltaZ =
     measurePointA && activeMeasureTarget ? Math.abs(activeMeasureTarget.z - measurePointA.z) : 0;
 
-  // Keyboard shortcut listener for measurement tool (M) and clear (Escape)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === 'm' || e.key === 'M') {
+  // Keyboard: M measures, Esc clears, arrows turn and tilt, + and − zoom, F fits, 0 resets.
+  const handleKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  handleKeyRef.current = (e: KeyboardEvent) => {
+    const t = e.target;
+    if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    switch (e.key) {
+      case 'm':
+      case 'M':
         setIsMeasuring((prev) => !prev);
-      } else if (e.key === 'Escape') {
-        if (measurePointB) {
-          setMeasurePointB(null);
-        } else if (measurePointA) {
-          setMeasurePointA(null);
-        } else if (isMeasuring) {
-          setIsMeasuring(false);
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [measurePointA, measurePointB, isMeasuring]);
+        return;
+      case 'Escape':
+        if (measurePointB) setMeasurePointB(null);
+        else if (measurePointA) setMeasurePointA(null);
+        else if (isMeasuring) setIsMeasuring(false);
+        return;
+      case 'ArrowLeft':
+        rotateBy(-KEY_ROTATE_DEG);
+        break;
+      case 'ArrowRight':
+        rotateBy(KEY_ROTATE_DEG);
+        break;
+      case 'ArrowUp':
+        tiltBy(KEY_TILT_DEG);
+        break;
+      case 'ArrowDown':
+        tiltBy(-KEY_TILT_DEG);
+        break;
+      case '+':
+      case '=':
+        zoomBy(ZOOM_STEP);
+        return;
+      case '-':
+      case '_':
+        zoomBy(1 / ZOOM_STEP);
+        return;
+      case 'f':
+      case 'F':
+        fitView();
+        return;
+      case '0':
+        applyViewPreset('perspective');
+        return;
+      default:
+        return;
+    }
+    e.preventDefault(); // arrows turn the model instead of scrolling the page
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => handleKeyRef.current(e);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const handleCopyDistance = () => {
     if (!measurePointA || !activeMeasureTarget) return;
@@ -596,508 +742,527 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     setHoverFloorPoint(null);
   };
 
-  // Mouse handlers for Orbit, Pan, and Measurement
-  const handleMouseDown = (e: React.MouseEvent) => {
-    mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
+  // Pointer input, for mouse, pen and touch alike. One pointer orbits (or pans with the right
+  // button or Shift); two touch points pinch to zoom and move together to pan. A tap or click
+  // that barely moves places a measurement point while measuring.
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{ distance: number; midX: number; midY: number } | null>(null);
+  const isTouchScreen = useMemo(() => window.matchMedia?.('(pointer: coarse)').matches ?? false, []);
 
-    if (e.button === 2 || e.shiftKey) {
-      // Right-click or Shift-drag: Pan camera
-      isDraggingRef.current = true;
-      isPanningRef.current = true;
-      lastMousePosRef.current = { x: e.clientX, y: e.clientY };
-      return;
-    }
+  const clampRadius = clampR;
+  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
 
-    if (isMeasuring && e.button === 0) {
-      // In measurement mode, left click places measurement points on mouseUp
-      return;
-    }
-
-    isDraggingRef.current = true;
-    isPanningRef.current = false;
-    lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+  /**
+   * Moves the camera target in the camera's own screen plane so the model follows the pointer:
+   * drag right and the model moves right, in every view including the top view. One pixel is
+   * the world size of a pixel at the target's distance (the ortho extent is ±0.45·radius; the
+   * perspective view is 45° tall).
+   */
+  const panBy = (dx: number, dy: number) => {
+    const height = canvasRef.current?.clientHeight || 600;
+    const worldPerPixel = ((isOrthographic ? 0.9 : 2 * Math.tan(Math.PI / 8)) * cameraRadius) / height;
+    const yaw = (cameraYaw * Math.PI) / 180.0;
+    const pitch = (cameraPitch * Math.PI) / 180.0;
+    // Camera basis for an eye at target + radius·(cos p·cos y, sin p, cos p·sin y), world up +Y.
+    const right = [Math.sin(yaw), 0, -Math.cos(yaw)];
+    const up = [-Math.cos(yaw) * Math.sin(pitch), Math.cos(pitch), -Math.sin(yaw) * Math.sin(pitch)];
+    setCameraTarget(
+      (prev) => [0, 1, 2].map((i) => prev[i] + (-right[i] * dx + up[i] * dy) * worldPerPixel) as [number, number, number]
+    );
   };
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  /** The floor point under a screen position, snapped to a corner when snapping is on. */
+  const floorPointAt = (clientX: number, clientY: number, snap = snapToCorners) => {
     const container = containerRef.current;
-    if (container && cameraMatsRef.current && isMeasuring) {
-      const rect = container.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
+    if (!container || !cameraMatsRef.current) return null;
+    const rect = container.getBoundingClientRect();
+    const raw = screenToFloorRay(
+      clientX - rect.left,
+      clientY - rect.top,
+      rect.width,
+      rect.height,
+      cameraMatsRef.current.viewMat,
+      cameraMatsRef.current.projMat
+    );
+    if (!raw) return null;
+    return snap ? snapToFloorGeometry(raw, snappingCandidates, 0.45) : { point: raw, snapped: false };
+  };
 
-      const rawFloor = screenToFloorRay(
-        mouseX,
-        mouseY,
-        rect.width,
-        rect.height,
-        cameraMatsRef.current.viewMat,
-        cameraMatsRef.current.projMat
-      );
+  /** Double-click or double-tap: move the view's centre to that floor point and zoom in 2×. */
+  const zoomToPoint = (clientX: number, clientY: number) => {
+    const hit = floorPointAt(clientX, clientY, false);
+    if (!hit) return;
+    setActiveView(null);
+    animateCamera({ target: [hit.point.x, 0, hit.point.z], radius: clampR(basePose().radius / 2) });
+  };
 
-      if (rawFloor) {
-        if (snapToCorners) {
-          const snapped = snapToFloorGeometry(rawFloor, snappingCandidates, 0.45);
-          setHoverFloorPoint(snapped.point);
-          setIsHoverSnapped(snapped.snapped);
-        } else {
-          setHoverFloorPoint(rawFloor);
-          setIsHoverSnapped(false);
-        }
+  const placeMeasurePoint = (point: Point2D) => {
+    setHoverFloorPoint(point);
+    if (!measurePointA || measurePointB) {
+      // First point, or a third click that starts a new measurement.
+      setMeasurePointA(point);
+      setMeasurePointB(null);
+    } else {
+      setMeasurePointB(point);
+    }
+  };
+
+  const startPinch = () => {
+    const [a, b] = [...pointersRef.current.values()];
+    pinchRef.current = { distance: Math.hypot(a.x - b.x, a.y - b.y), midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2 };
+    isDraggingRef.current = false;
+  };
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    stopCameraMotion();
+    setAutoRotate(false);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // The pointer is already gone (a touch the system cancelled): track it without capture.
+    }
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointersRef.current.size === 2) {
+      startPinch();
+      return;
+    }
+    mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
+    lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+    isDraggingRef.current = true;
+    isPanningRef.current = e.button === 2 || e.shiftKey;
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (isMeasuring && e.pointerType === 'mouse') {
+      const hit = floorPointAt(e.clientX, e.clientY);
+      if (hit) {
+        setHoverFloorPoint(hit.point);
+        setIsHoverSnapped(hit.snapped);
       }
     }
 
-    if (!isDraggingRef.current) return;
+    const pointers = pointersRef.current;
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
+    const pinch = pinchRef.current;
+    if (pointers.size >= 2 && pinch) {
+      const [a, b] = [...pointers.values()];
+      const distance = Math.hypot(a.x - b.x, a.y - b.y);
+      const midX = (a.x + b.x) / 2;
+      const midY = (a.y + b.y) / 2;
+      if (distance > 0 && pinch.distance > 0) setCameraRadius((prev) => clampRadius(prev * (pinch.distance / distance)));
+      panBy(midX - pinch.midX, midY - pinch.midY);
+      pinchRef.current = { distance, midX, midY };
+      return;
+    }
+
+    if (!isDraggingRef.current) return;
     const dx = e.clientX - lastMousePosRef.current.x;
     const dy = e.clientY - lastMousePosRef.current.y;
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
 
     if (isPanningRef.current) {
-      // Pan camera target
-      const panFactor = 0.015 * (cameraRadius / 15.0);
-      const yawRad = (cameraYaw * Math.PI) / 180.0;
-      const rightX = -Math.sin(yawRad);
-      const rightZ = Math.cos(yawRad);
-
-      setCameraTarget((prev) => [
-        prev[0] - rightX * dx * panFactor,
-        prev[1] + dy * panFactor,
-        prev[2] - rightZ * dx * panFactor,
-      ]);
-    } else {
-      // Orbit camera
+      panBy(dx, dy);
+    } else if (dx !== 0 || dy !== 0) {
       setCameraYaw((prev) => prev + dx * 0.4);
       setCameraPitch((prev) => Math.max(5, Math.min(89, prev - dy * 0.4)));
+      setActiveView(null); // orbiting leaves the preset view
     }
   };
 
-  const handleMouseUp = (e: React.MouseEvent) => {
-    const moveDist = Math.hypot(
-      e.clientX - mouseDownPosRef.current.x,
-      e.clientY - mouseDownPosRef.current.y
-    );
+  const endPointer = (e: React.PointerEvent<HTMLCanvasElement>, cancelled: boolean) => {
+    const pointers = pointersRef.current;
+    const wasPinching = pinchRef.current !== null;
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchRef.current = null;
 
-    // Left click with minimal movement places measurement points
-    if (isMeasuring && moveDist < 6 && e.button === 0 && hoverFloorPoint) {
-      if (!measurePointA) {
-        setMeasurePointA(hoverFloorPoint);
-        setMeasurePointB(null);
-      } else if (!measurePointB) {
-        setMeasurePointB(hoverFloorPoint);
-      } else {
-        // Third click starts new measurement from this point
-        setMeasurePointA(hoverFloorPoint);
-        setMeasurePointB(null);
+    if (wasPinching) {
+      // The finger left on the screen carries on orbiting from where it is, without a jump.
+      const rest = [...pointers.values()][0];
+      if (rest) {
+        lastMousePosRef.current = { ...rest };
+        mouseDownPosRef.current = { x: -1e6, y: -1e6 }; // never counts as a tap
+        isDraggingRef.current = true;
+        isPanningRef.current = false;
       }
+      return;
     }
 
+    const moveDist = Math.hypot(e.clientX - mouseDownPosRef.current.x, e.clientY - mouseDownPosRef.current.y);
+    if (!cancelled && isMeasuring && moveDist < 6 && e.button === 0) {
+      const hit = floorPointAt(e.clientX, e.clientY);
+      if (hit) {
+        setIsHoverSnapped(hit.snapped);
+        placeMeasurePoint(hit.point);
+      }
+    }
+    if (!cancelled && !isMeasuring && moveDist < 6 && e.button === 0) {
+      const now = performance.now();
+      const last = lastTapRef.current;
+      if (last && now - last.time < 320 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) {
+        lastTapRef.current = null;
+        zoomToPoint(e.clientX, e.clientY);
+      } else {
+        lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+      }
+    }
     isDraggingRef.current = false;
     isPanningRef.current = false;
   };
 
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    setCameraRadius((prev) => Math.max(3.0, Math.min(45.0, prev + e.deltaY * 0.02)));
-  };
+  // Wheel zoom needs a non-passive listener to stop the page scrolling at the same time.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      stopCameraMotion();
+      setCameraRadius((prev) => clampRadius(prev * Math.exp(e.deltaY * 0.0015)));
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
 
   // Screen coordinates for overlay
   const { screenA, screenB, screenHover } = screenOverlayCoords;
   const targetScreen = screenB || (isMeasuring && screenA ? screenHover : null);
 
+  const planWidth = walls.length ? Math.max(...walls.flatMap((w) => [w.start.x, w.end.x])) - Math.min(...walls.flatMap((w) => [w.start.x, w.end.x])) : 0;
+  const planDepth = walls.length ? Math.max(...walls.flatMap((w) => [w.start.z, w.end.z])) - Math.min(...walls.flatMap((w) => [w.start.z, w.end.z])) : 0;
+  const doorCount = floorplan.openings.filter((o) => o.kind === 'door').length;
+  const windowCount = floorplan.openings.filter((o) => o.kind === 'window').length;
+  const floorArea = floorplan.rooms.reduce((sum, room) => sum + room.areaSqM, 0);
+  const title = planLabel(floorplan);
+
+  // Same geometry as the render: walls at the current height and thickness, plus the room floors.
+  const handleExportObj = () => {
+    const meshes: Mesh3D[] = walls.map((w) =>
+      extrudeWallWithOpenings({ ...w, height: wallHeight, thickness: wallThickness }, wallCuts(floorplan.openings, w, wallHeight)),
+    );
+    meshes.push(...floorplan.rooms.map((r) => generateFloorMesh(r.corners)));
+    downloadOBJ(combineMeshes(meshes), `${floorplan.id}.obj`);
+  };
+
+  const navigationHint = isTouchScreen
+    ? 'Drag to orbit · Pinch to zoom · Two fingers to pan · Double-tap to zoom in'
+    : 'Drag to orbit · Right-drag to pan · Scroll to zoom · Double-click to zoom in';
+  const cameraButtons: { label: string; keys?: string; icon: React.ReactNode; onClick: () => void; pressed?: boolean }[][] = [
+    [
+      { label: 'Zoom in', keys: '+', icon: <ZoomIn className="h-4 w-4" strokeWidth={1.5} />, onClick: () => zoomBy(ZOOM_STEP) },
+      { label: 'Zoom out', keys: '−', icon: <ZoomOut className="h-4 w-4" strokeWidth={1.5} />, onClick: () => zoomBy(1 / ZOOM_STEP) },
+      { label: 'Fit to view', keys: 'F', icon: <Maximize className="h-4 w-4" strokeWidth={1.5} />, onClick: fitView },
+    ],
+    [
+      { label: 'Turn left', keys: '←', icon: <RotateCcw className="h-4 w-4" strokeWidth={1.5} />, onClick: () => rotateBy(-ROTATE_STEP_DEG) },
+      { label: 'Turn right', keys: '→', icon: <RotateCw className="h-4 w-4" strokeWidth={1.5} />, onClick: () => rotateBy(ROTATE_STEP_DEG) },
+      {
+        label: autoRotate ? 'Stop turning' : 'Turn automatically',
+        icon: autoRotate ? <Pause className="h-4 w-4" strokeWidth={1.5} /> : <Play className="h-4 w-4" strokeWidth={1.5} />,
+        onClick: () => toggleAutoRotate(),
+        pressed: autoRotate,
+      },
+    ],
+    [{ label: 'Reset view', keys: '0', icon: <House className="h-4 w-4" strokeWidth={1.5} />, onClick: () => applyViewPreset('perspective') }],
+  ];
+  const heading = ((cameraYaw % 360) + 360) % 360;
+  const fitNow = fitRadius(isOrthographic);
+  // The zoom slider runs on a log scale, so each step is the same factor at every distance.
+  const zoomLog = Math.log2(fitNow / cameraRadius);
+
   return (
-    <div
-      ref={containerRef}
-      className={`relative w-full h-full bg-slate-950 flex flex-col select-none overflow-hidden rounded-xl border border-slate-800 shadow-2xl ${
-        isMeasuring ? 'cursor-crosshair' : ''
-      }`}
-    >
-      {/* Top Toolbar */}
-      <div className="absolute top-3 left-3 right-3 z-10 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
-        {/* View Presets */}
-        <div className="flex items-center gap-1 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-lg border border-slate-700/80 shadow-lg pointer-events-auto">
-          <span className="text-xs font-semibold text-slate-400 px-2 flex items-center gap-1.5">
-            <Compass className="w-3.5 h-3.5 text-blue-400" /> Camera:
-          </span>
-          <button
-            onClick={() => applyViewPreset('perspective')}
-            className="px-2.5 py-1 text-xs font-medium rounded-md text-slate-200 hover:bg-slate-800 hover:text-white transition"
-          >
-            3D Orbit
-          </button>
-          <button
-            onClick={() => applyViewPreset('top')}
-            className="px-2.5 py-1 text-xs font-medium rounded-md text-slate-200 hover:bg-slate-800 hover:text-white transition"
-          >
-            Plan (Top)
-          </button>
-          <button
-            onClick={() => applyViewPreset('isometric')}
-            className="px-2.5 py-1 text-xs font-medium rounded-md text-slate-200 hover:bg-slate-800 hover:text-white transition"
-          >
-            Isometric 45°
-          </button>
-          <button
-            onClick={() => applyViewPreset('front')}
-            className="px-2.5 py-1 text-xs font-medium rounded-md text-slate-200 hover:bg-slate-800 hover:text-white transition"
-          >
-            Elevation
-          </button>
+    <div className="flex min-h-full flex-col gap-5 lg:h-full">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="text-[22px] font-semibold leading-7">{title}</h1>
+          <p className="num mt-1 text-muted">
+            {walls.length} walls · {floorplan.rooms.length} rooms · {planWidth.toFixed(1)} × {planDepth.toFixed(1)} m · {doorCount} doors,{' '}
+            {windowCount} windows
+          </p>
         </div>
-
-        {/* Shading, Projection & Measurement Toggles */}
-        <div className="flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md p-1.5 rounded-lg border border-slate-700/80 shadow-lg pointer-events-auto">
-          {/* Measurement Overlay Tool Button */}
-          <button
-            onClick={() => {
-              setIsMeasuring(!isMeasuring);
-              if (!isMeasuring && !measurePointA) {
-                // activate
-              }
-            }}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md transition flex items-center gap-1.5 ${
-              isMeasuring
-                ? 'bg-emerald-600 text-white font-semibold ring-2 ring-emerald-400/50 shadow-md'
-                : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-            }`}
-            title="Measure real-world distance between two points on the floorplan (Shortcut: M)"
-          >
-            <Ruler className="w-3.5 h-3.5 text-emerald-300" />
-            <span>Measure Tool</span>
-            <kbd className="text-[10px] bg-slate-800 px-1 py-0.2 rounded border border-slate-700 font-mono">M</kbd>
-          </button>
-
-          {isMeasuring && (
-            <button
-              onClick={() => setSnapToCorners(!snapToCorners)}
-              className={`px-2 py-1 text-xs font-medium rounded-md transition flex items-center gap-1 ${
-                snapToCorners
-                  ? 'bg-blue-600 text-white font-semibold'
-                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200'
-              }`}
-              title="Magnetic snap to nearest wall corner or opening"
-            >
-              <Magnet className="w-3.5 h-3.5" />
-              <span>Snap</span>
-            </button>
-          )}
-
-          <div className="w-[1px] h-4 bg-slate-700 mx-0.5" />
-
-          <button
-            onClick={() => setIsOrthographic(!isOrthographic)}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md transition flex items-center gap-1 ${
-              isOrthographic
-                ? 'bg-blue-600 text-white font-semibold shadow-inner'
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-            title="Toggle between Perspective and Orthographic projection matrix"
-          >
-            <Maximize2 className="w-3.5 h-3.5" />
-            {isOrthographic ? 'Ortho (P)' : 'Perspective'}
-          </button>
-
-          <button
-            onClick={() => setIsWireframe(!isWireframe)}
-            className={`px-2.5 py-1 text-xs font-medium rounded-md transition flex items-center gap-1 ${
-              isWireframe
-                ? 'bg-amber-600 text-white font-semibold'
-                : 'text-slate-300 hover:bg-slate-800'
-            }`}
-            title="Toggle wireframe triangle mesh visualization"
-          >
-            <Grid className="w-3.5 h-3.5" />
-            Wireframe
-          </button>
-
-          {/* Render Mode */}
-          <select
-            value={renderMode}
-            onChange={(e) => setRenderMode(e.target.value as any)}
-            className="bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-          >
-            <option value="shaded">Phong Shaded</option>
-            <option value="normals">Normal Vectors [RGB]</option>
-            <option value="depth">Z-Buffer Depth</option>
-          </select>
-
-          {/* Style Theme */}
-          <select
-            value={renderStyle}
-            onChange={(e) => setRenderStyle(e.target.value as any)}
-            className="bg-slate-800 text-slate-200 text-xs rounded-md px-2 py-1 border border-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-          >
-            <option value="architectural">Architectural Plaster</option>
-            <option value="blueprint">Cyan Blueprint</option>
-            <option value="clay">Clay Model</option>
-          </select>
-
-          <button
-            onClick={() => applyViewPreset('perspective')}
-            className="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded transition"
-            title="Reset Camera"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-          </button>
+        <div className="flex items-center gap-2">
+          <Button aria-pressed={isMeasuring} onClick={() => setIsMeasuring((prev) => !prev)} title="Measure between two floor points (M)">
+            <Ruler className="h-4 w-4" strokeWidth={1.5} />
+            Measure
+          </Button>
+          <Button variant="primary" onClick={handleExportObj}>
+            <Download className="h-4 w-4" strokeWidth={1.5} />
+            Export OBJ
+          </Button>
         </div>
-      </div>
+      </header>
 
-      {/* Measurement Mode Context Banner */}
-      {isMeasuring && (
-        <div className="absolute top-16 left-3 right-3 z-10 flex items-center justify-between pointer-events-none">
-          <div className="bg-slate-900/95 backdrop-blur-md px-3.5 py-2 rounded-lg border border-emerald-500/40 shadow-xl flex items-center gap-3 text-xs text-slate-200 pointer-events-auto animate-in fade-in duration-150">
-            <div className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-emerald-400">Ruler Mode:</span>
-              {!measurePointA ? (
-                <span className="text-slate-300">Click first point on the floorplan (e.g. wall corner or doorway)</span>
-              ) : !measurePointB ? (
-                <span className="text-slate-300">Click second point to finish measurement (or press Esc to clear)</span>
-              ) : (
-                <span className="text-emerald-300 font-medium">Measurement Locked ({measuredDistanceMeters.toFixed(2)} m) — Click anywhere to measure new span</span>
-              )}
-            </div>
+      <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <div
+          ref={containerRef}
+          className={`relative h-[60vh] min-h-[360px] select-none overflow-hidden rounded-lg border border-line bg-raised lg:h-auto ${
+            isMeasuring ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
+          }`}
+        >
+          <canvas
+            ref={canvasRef}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={(e) => endPointer(e, false)}
+            onPointerCancel={(e) => endPointer(e, true)}
+            onContextMenu={(e) => e.preventDefault()}
+            className="block h-full w-full touch-none"
+            aria-label={`3D model of ${title}. ${navigationHint}.`}
+          />
 
-            {measurePointA && (
-              <div className="flex items-center gap-2 border-l border-slate-700 pl-3">
-                <span className="font-mono text-xs font-bold text-emerald-400">
-                  {measuredDistanceMeters.toFixed(2)} m
-                </span>
-                <span className="text-[11px] text-slate-400 font-mono">
-                  ({measuredDistanceFeet.toFixed(2)} ft)
-                </span>
-                <button
-                  onClick={handleCopyDistance}
-                  className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition"
-                  title="Copy distance to clipboard"
-                >
-                  {copiedDistance ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                </button>
-                <button
-                  onClick={handleClearMeasurement}
-                  className="p-1 hover:bg-slate-800 text-red-400 hover:text-red-300 rounded transition"
-                  title="Clear measurement"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* WebGL Canvas Element */}
-      <canvas
-        ref={canvasRef}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onContextMenu={(e) => e.preventDefault()}
-        onWheel={handleWheel}
-        className="w-full h-full block"
-      />
-
-      {/* SVG Measurement Overlay Projected onto 3D Scene */}
-      <svg className="absolute inset-0 w-full h-full pointer-events-none z-10 overflow-visible">
-        <defs>
-          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
-          </filter>
-        </defs>
-
-        {/* Dynamic Measurement Line between Point A and Point B / Hover Point */}
-        {screenA && targetScreen && (
-          <g>
-            {/* Background shadow stroke for contrast */}
-            <line
-              x1={screenA[0]}
-              y1={screenA[1]}
-              x2={targetScreen[0]}
-              y2={targetScreen[1]}
-              stroke="#0f172a"
-              strokeWidth="5"
-              strokeLinecap="round"
-            />
-            {/* Glowing architectural dimension line */}
-            <line
-              x1={screenA[0]}
-              y1={screenA[1]}
-              x2={targetScreen[0]}
-              y2={targetScreen[1]}
-              stroke="#10b981"
-              strokeWidth="2.5"
-              strokeDasharray={measurePointB ? 'none' : '6,4'}
-              filter="url(#glow)"
-            />
-
-            {/* Perpendicular tick marks at endpoints */}
-            {(() => {
-              const dx = targetScreen[0] - screenA[0];
-              const dy = targetScreen[1] - screenA[1];
-              const len = Math.hypot(dx, dy);
-              if (len > 8) {
-                const nx = (-dy / len) * 8;
-                const ny = (dx / len) * 8;
-                return (
-                  <>
-                    <line
-                      x1={screenA[0] - nx}
-                      y1={screenA[1] - ny}
-                      x2={screenA[0] + nx}
-                      y2={screenA[1] + ny}
-                      stroke="#10b981"
-                      strokeWidth="2.5"
-                    />
-                    <line
-                      x1={targetScreen[0] - nx}
-                      y1={targetScreen[1] - ny}
-                      x2={targetScreen[0] + nx}
-                      y2={targetScreen[1] + ny}
-                      stroke="#10b981"
-                      strokeWidth="2.5"
-                    />
-                  </>
-                );
-              }
-              return null;
-            })()}
-
-            {/* Floating Distance Badge placed at line midpoint */}
-            {(() => {
-              const midX = (screenA[0] + targetScreen[0]) / 2;
-              const midY = (screenA[1] + targetScreen[1]) / 2;
-              return (
+          {/* Measurement drawn over the scene, in the data hue. */}
+          <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+            {screenA && targetScreen && (
+              <g>
+                <line x1={screenA[0]} y1={screenA[1]} x2={targetScreen[0]} y2={targetScreen[1]} stroke="var(--surface)" strokeWidth="5" strokeLinecap="round" />
+                <line
+                  x1={screenA[0]}
+                  y1={screenA[1]}
+                  x2={targetScreen[0]}
+                  y2={targetScreen[1]}
+                  stroke="var(--accent)"
+                  strokeWidth="2"
+                  strokeDasharray={measurePointB ? undefined : '6,4'}
+                />
+                {(() => {
+                  const dx = targetScreen[0] - screenA[0];
+                  const dy = targetScreen[1] - screenA[1];
+                  const len = Math.hypot(dx, dy);
+                  if (len <= 8) return null;
+                  const nx = (-dy / len) * 7;
+                  const ny = (dx / len) * 7;
+                  return [screenA, targetScreen].map((p, i) => (
+                    <line key={i} x1={p[0] - nx} y1={p[1] - ny} x2={p[0] + nx} y2={p[1] + ny} stroke="var(--accent)" strokeWidth="2" />
+                  ));
+                })()}
                 <foreignObject
-                  x={midX - 90}
-                  y={midY - 32}
-                  width="180"
-                  height="64"
-                  className="overflow-visible pointer-events-none select-none"
+                  x={(screenA[0] + targetScreen[0]) / 2 - 80}
+                  y={(screenA[1] + targetScreen[1]) / 2 - 18}
+                  width="160"
+                  height="36"
+                  className="overflow-visible"
                 >
-                  <div className="flex flex-col items-center">
-                    <div className="bg-slate-900/95 backdrop-blur-md px-2.5 py-1 rounded-md border border-emerald-500 shadow-xl flex items-center gap-1.5 text-center">
-                      <Ruler className="w-3 h-3 text-emerald-400" />
-                      <span className="font-mono text-xs font-bold text-emerald-300">
-                        {measuredDistanceMeters.toFixed(2)} m
-                      </span>
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        ({measuredDistanceFeet.toFixed(2)} ft)
-                      </span>
-                    </div>
-                    <div className="text-[9px] font-mono text-slate-300 bg-slate-950/90 px-2 py-0.5 rounded border border-slate-800 shadow mt-0.5">
-                      ΔX: {deltaX.toFixed(2)}m · ΔZ: {deltaZ.toFixed(2)}m
-                    </div>
+                  <div className="flex justify-center">
+                    <span className="num rounded-md border border-line bg-surface px-2 py-0.5 text-[13px] font-medium text-ink">
+                      {measuredDistanceMeters.toFixed(2)} m
+                    </span>
                   </div>
                 </foreignObject>
-              );
-            })()}
-          </g>
-        )}
-
-        {/* Start Point Marker A */}
-        {screenA && (
-          <g>
-            <circle cx={screenA[0]} cy={screenA[1]} r="7" fill="#10b981" fillOpacity="0.3" filter="url(#glow)" />
-            <circle cx={screenA[0]} cy={screenA[1]} r="4.5" fill="#10b981" stroke="#ffffff" strokeWidth="1.5" />
-            <text
-              x={screenA[0] + 8}
-              y={screenA[1] - 8}
-              fill="#10b981"
-              fontSize="10"
-              fontWeight="bold"
-              fontFamily="monospace"
-            >
-              P1 ({measurePointA?.x.toFixed(1)}m, {measurePointA?.z.toFixed(1)}m)
-            </text>
-          </g>
-        )}
-
-        {/* End Point Marker B */}
-        {screenB && measurePointB && (
-          <g>
-            <circle cx={screenB[0]} cy={screenB[1]} r="7" fill="#3b82f6" fillOpacity="0.3" filter="url(#glow)" />
-            <circle cx={screenB[0]} cy={screenB[1]} r="4.5" fill="#3b82f6" stroke="#ffffff" strokeWidth="1.5" />
-            <text
-              x={screenB[0] + 8}
-              y={screenB[1] - 8}
-              fill="#60a5fa"
-              fontSize="10"
-              fontWeight="bold"
-              fontFamily="monospace"
-            >
-              P2 ({measurePointB.x.toFixed(1)}m, {measurePointB.z.toFixed(1)}m)
-            </text>
-          </g>
-        )}
-
-        {/* Hover / Snap Reticle indicator */}
-        {isMeasuring && screenHover && !measurePointB && (
-          <g>
-            <circle
-              cx={screenHover[0]}
-              cy={screenHover[1]}
-              r={isHoverSnapped ? '9' : '5'}
-              fill="none"
-              stroke={isHoverSnapped ? '#10b981' : '#38bdf8'}
-              strokeWidth="2"
-              strokeDasharray={isHoverSnapped ? 'none' : '3,3'}
-            />
-            {isHoverSnapped && (
-              <>
-                <circle cx={screenHover[0]} cy={screenHover[1]} r="3" fill="#10b981" />
-                <text
-                  x={screenHover[0] + 12}
-                  y={screenHover[1] + 4}
-                  fill="#34d399"
-                  fontSize="10"
-                  fontFamily="sans-serif"
-                  fontWeight="bold"
-                >
-                  Corner Snap
-                </text>
-              </>
+              </g>
             )}
-          </g>
-        )}
-      </svg>
+            {screenA && <circle cx={screenA[0]} cy={screenA[1]} r="4.5" fill="var(--accent)" stroke="var(--surface)" strokeWidth="1.5" />}
+            {screenB && measurePointB && (
+              <circle cx={screenB[0]} cy={screenB[1]} r="4.5" fill="var(--accent)" stroke="var(--surface)" strokeWidth="1.5" />
+            )}
+            {isMeasuring && screenHover && !measurePointB && (
+              <circle
+                cx={screenHover[0]}
+                cy={screenHover[1]}
+                r={isHoverSnapped ? 8 : 5}
+                fill="none"
+                stroke={isHoverSnapped ? 'var(--accent)' : 'var(--muted)'}
+                strokeWidth="1.5"
+                strokeDasharray={isHoverSnapped ? undefined : '3,3'}
+              />
+            )}
+          </svg>
 
-      {/* Bottom HUD: OpenGL Pipeline Diagnostics */}
-      <div className="absolute bottom-3 left-3 right-3 z-10 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
-        <div className="bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-800 text-xs text-slate-300 flex items-center gap-4 shadow-lg pointer-events-auto">
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="font-semibold text-slate-200">OpenGL 3.3 Core Pipeline</span>
+          {/* Small controls pinned inside the canvas corners. */}
+          <div className="absolute left-3 top-3 flex rounded-md border border-line bg-surface p-0.5" role="group" aria-label="Camera views">
+            {VIEW_BUTTONS.map(({ preset, label }) => (
+              <button
+                key={preset}
+                type="button"
+                aria-pressed={activeView === preset}
+                onClick={() => applyViewPreset(preset)}
+                className={`h-7 rounded-[5px] px-2.5 text-[13px] transition-colors ${
+                  activeView === preset ? 'bg-active font-medium text-ink' : 'text-muted hover:bg-raised hover:text-ink'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-          <div className="text-slate-400">
-            Vertices: <span className="font-mono text-emerald-400 font-semibold">{stats.vertices}</span>
+          <div className="absolute right-3 top-3 flex flex-col gap-2" role="toolbar" aria-label="Camera controls" aria-orientation="vertical">
+            {cameraButtons.map((group, i) => (
+              <div key={i} className="flex flex-col rounded-md border border-line bg-surface p-0.5">
+                {group.map((b) => (
+                  <button
+                    key={b.label}
+                    type="button"
+                    onClick={b.onClick}
+                    aria-label={b.label}
+                    aria-pressed={b.pressed}
+                    title={b.keys ? `${b.label} (${b.keys})` : b.label}
+                    className={`flex h-8 w-8 items-center justify-center rounded-[5px] transition-colors ${
+                      b.pressed ? 'bg-active text-ink' : 'text-muted hover:bg-raised hover:text-ink'
+                    }`}
+                  >
+                    {b.icon}
+                  </button>
+                ))}
+              </div>
+            ))}
           </div>
-          <div className="text-slate-400">
-            Triangles: <span className="font-mono text-blue-400 font-semibold">{stats.triangles}</span>
-          </div>
-          <div className="text-slate-400">
-            FPS: <span className="font-mono text-amber-400 font-semibold">{Number.isFinite(stats.fps) && stats.fps > 0 ? stats.fps : 60}</span>
+
+          <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-end justify-between gap-2">
+            {isMeasuring ? (
+              <div className="flex items-center gap-3 rounded-md border border-line bg-surface px-3 py-2 text-[13px]">
+                {measurePointA && activeMeasureTarget ? (
+                  <>
+                    <span className="num font-medium text-ink">{measuredDistanceMeters.toFixed(2)} m</span>
+                    <span className="num text-muted">
+                      {measuredDistanceFeet.toFixed(2)} ft · ΔX {deltaX.toFixed(2)} m · ΔZ {deltaZ.toFixed(2)} m
+                    </span>
+                    <button type="button" onClick={handleCopyDistance} aria-label="Copy distance" className="text-muted hover:text-ink">
+                      {copiedDistance ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" strokeWidth={1.5} />}
+                    </button>
+                    <button type="button" onClick={handleClearMeasurement} aria-label="Clear measurement" className="text-muted hover:text-ink">
+                      <Trash2 className="h-4 w-4" strokeWidth={1.5} />
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-muted">{isTouchScreen ? 'Tap' : 'Click'} a point on the floor, then a second one.</span>
+                )}
+                <label className="flex items-center gap-1.5 border-l border-line pl-3 text-muted">
+                  <input type="checkbox" checked={snapToCorners} onChange={() => setSnapToCorners(!snapToCorners)} className="accent-[var(--text)]" />
+                  Snap to corners
+                </label>
+              </div>
+            ) : (
+              <span className="rounded-md bg-surface/80 px-2 py-1 text-xs text-muted">{navigationHint}</span>
+            )}
           </div>
         </div>
 
-        <div className="bg-slate-900/90 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-800 text-[11px] text-slate-400 flex items-center gap-3 shadow-lg pointer-events-auto">
-          {isMeasuring ? (
-            <>
-              <span className="text-emerald-400 font-medium">Click 2 floor points to measure distance</span>
-              <span><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 border border-slate-700">Esc</kbd> Clear</span>
-              <span><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 border border-slate-700">Right-Drag</kbd> Pan</span>
-            </>
-          ) : (
-            <>
-              <span><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 border border-slate-700">M</kbd> Ruler</span>
-              <span><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 border border-slate-700">Left-Drag</kbd> Orbit</span>
-              <span><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 border border-slate-700">Right-Drag</kbd> Pan</span>
-              <span><kbd className="bg-slate-800 px-1.5 py-0.5 rounded text-slate-300 border border-slate-700">Scroll</kbd> Zoom</span>
-            </>
-          )}
-        </div>
+        <aside className="flex flex-col gap-6 lg:overflow-y-auto" aria-label="Model settings">
+          <section>
+            <SectionTitle>Plan</SectionTitle>
+            <div className="rounded-md bg-raised p-3">
+              <PlanThumbnail walls={walls} openings={floorplan.openings} wallThickness={wallThickness} className="h-36 w-full" title={`Top-down drawing of ${title}`} />
+            </div>
+            <div className="mt-1">
+              <KeyValue label="Floor area">
+                {floorArea.toFixed(1)} <span className="text-muted">m²</span>
+              </KeyValue>
+            </div>
+          </section>
+
+          <section>
+            <SectionTitle>Camera</SectionTitle>
+            <Slider
+              label="Turn"
+              value={heading}
+              display={`${Math.round(heading)}°`}
+              min={0}
+              max={359}
+              step={1}
+              onChange={(v) => {
+                toggleAutoRotate(false);
+                setActiveView(null);
+                setCameraYaw(v);
+              }}
+            />
+            <Slider
+              label="Tilt"
+              value={cameraPitch}
+              display={`${Math.round(cameraPitch)}°`}
+              min={5}
+              max={89}
+              step={1}
+              onChange={(v) => {
+                stopCameraMotion();
+                setActiveView(null);
+                setCameraPitch(v);
+              }}
+            />
+            <Slider
+              label="Zoom"
+              value={zoomLog}
+              display={`${Math.round(2 ** zoomLog * 100)}%`}
+              min={Math.ceil(Math.log2(fitNow / maxRadiusRef.current) * 20) / 20}
+              max={Math.floor(Math.log2(fitNow / MIN_RADIUS) * 20) / 20}
+              step={0.05}
+              onChange={(v) => {
+                stopCameraMotion();
+                setCameraRadius(clampR(fitNow / 2 ** v));
+              }}
+            />
+            <Switch label="Turn automatically" checked={autoRotate} onChange={(on) => toggleAutoRotate(on)} />
+            <p className="mt-1 text-xs text-muted">Keys: ← → turn · ↑ ↓ tilt · + − zoom · F fit · 0 reset</p>
+          </section>
+
+          <section>
+            <SectionTitle>View</SectionTitle>
+            <div className="flex flex-col gap-2">
+              <Segmented
+                label="Projection"
+                value={isOrthographic ? 'ortho' : 'perspective'}
+                onChange={(v) => setIsOrthographic(v === 'ortho')}
+                options={[
+                  { value: 'perspective', label: 'Perspective' },
+                  { value: 'ortho', label: 'Orthographic' },
+                ]}
+              />
+              <Segmented
+                label="Shading"
+                value={renderMode}
+                onChange={setRenderMode}
+                options={[
+                  { value: 'shaded', label: 'Shaded' },
+                  { value: 'normals', label: 'Normals' },
+                  { value: 'depth', label: 'Depth' },
+                ]}
+              />
+              <label className="flex h-8 items-center justify-between gap-3 text-[13px]">
+                Material
+                <select
+                  value={renderStyle}
+                  onChange={(e) => setRenderStyle(e.target.value as RenderStyle)}
+                  className="h-8 rounded-md border border-control bg-surface px-2 text-[13px] text-ink"
+                >
+                  <option value="architectural">Plaster</option>
+                  <option value="blueprint">Blueprint</option>
+                  <option value="clay">Clay</option>
+                </select>
+              </label>
+              <Switch label="Wireframe" checked={isWireframe} onChange={setIsWireframe} />
+            </div>
+          </section>
+
+          <section>
+            <SectionTitle>Walls</SectionTitle>
+            <Slider
+              label="Height"
+              value={wallHeight}
+              display={`${wallHeight.toFixed(1)} m`}
+              min={1.5}
+              max={4.5}
+              step={0.1}
+              onChange={onChangeWallHeight}
+            />
+            <Slider
+              label="Thickness"
+              value={wallThickness}
+              display={`${wallThickness.toFixed(2)} m`}
+              min={0.1}
+              max={0.4}
+              step={0.02}
+              onChange={onChangeWallThickness}
+            />
+            <Switch label="Furniture" checked={showFurniture} onChange={onToggleFurniture} />
+          </section>
+
+          <section>
+            <SectionTitle>Model</SectionTitle>
+            <KeyValue label="Vertices">{stats.vertices.toLocaleString()}</KeyValue>
+            <KeyValue label="Triangles">{stats.triangles.toLocaleString()}</KeyValue>
+            <KeyValue label="Frame rate">
+              {Number.isFinite(stats.fps) && stats.fps > 0 ? stats.fps : 60} <span className="text-muted">fps</span>
+            </KeyValue>
+          </section>
+        </aside>
       </div>
     </div>
   );
 };
-
