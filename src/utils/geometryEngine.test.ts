@@ -4,7 +4,7 @@
  * Covers the Tier-1 deliverables from the final implementation plan (B10):
  *   - Coordinate mapping (R3 fix: z = +s*(v-v0), no mirroring)
  *   - Asymmetric-plan no-mirror regression test (M0/M1 gate)
- *   - Wall extrusion counts and face structure
+ *   - Wall extrusion counts and face structure, and door/window holes
  *   - Rasterization (Bresenham, DDA)
  *   - MVP pipeline (matrix stack, ray-floor, snapping)
  *   - Mesh validators (winding, outward normals, edge manifold, dimension)
@@ -18,6 +18,7 @@ import {
   imageToWorld,
   worldToImage,
   extrudeWallSegment,
+  extrudeWallWithOpenings,
   mat4Identity,
   mat4Multiply,
   mat4Perspective,
@@ -291,3 +292,62 @@ test('[Tri] triangulatePolygon2D correctly triangulates concave L-shaped polygon
 });
 
 
+
+// ─── Doors and windows cut into walls ───────────────────────────────────────
+
+type Box = { min: [number, number, number]; max: [number, number, number]; mesh: ReturnType<typeof extrudeWallSegment> };
+
+/** The separate boxes of a wall mesh (24 vertices, 36 indices each), with their extents. */
+function boxesOf(mesh: ReturnType<typeof extrudeWallSegment>): Box[] {
+  const boxes: Box[] = [];
+  for (let b = 0; b * 24 < mesh.vertices.length; b++) {
+    const vertices = mesh.vertices.slice(b * 24, b * 24 + 24);
+    const indices = mesh.indices.slice(b * 36, b * 36 + 36).map((i) => i - b * 24);
+    const min: [number, number, number] = [Infinity, Infinity, Infinity];
+    const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+    for (const v of vertices) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], v.position[k]); max[k] = Math.max(max[k], v.position[k]); }
+    boxes.push({ min, max, mesh: { vertices, indices } });
+  }
+  return boxes;
+}
+const solidAt = (boxes: Box[], p: [number, number, number]) =>
+  boxes.some((b) => p.every((v, k) => v > b.min[k] + 1e-9 && v < b.max[k] - 1e-9));
+
+const longWall = { id: 'w', start: { x: 0, z: 0 }, end: { x: 6, z: 0 }, thickness: 0.2, height: 2.8 };
+
+test('[Openings] a door leaves a lintel, a window leaves a sill and a lintel, and every piece is a closed box', () => {
+  const mesh = extrudeWallWithOpenings(longWall, [
+    { wallId: 'w', t0: 1 / 6, t1: 2 / 6, sill: 0, head: 2.1 }, // door, x 1..2
+    { wallId: 'w', t0: 3.5 / 6, t1: 5 / 6, sill: 0.9, head: 2.1 }, // window, x 3.5..5
+  ]);
+  const boxes = boxesOf(mesh);
+  // Solid 0..1, lintel over the door, solid 2..3.5, sill and lintel of the window, solid 5..6.
+  assert.equal(boxes.length, 6);
+  assert.equal(mesh.indices.length, 6 * 36);
+  for (const box of boxes) {
+    assert.equal(validateWinding(box.mesh).passRate, 1, 'every triangle winds counter-clockwise');
+    assert.equal(validateOutwardNormals(box.mesh).outwardRate, 1, 'every face points out of its box');
+    assert.ok(validateEdgeManifold(box.mesh).isManifold, 'every box is watertight');
+  }
+  assert.ok(!solidAt(boxes, [1.5, 1.0, 0]), 'you can walk through the door');
+  assert.ok(solidAt(boxes, [1.5, 2.5, 0]), 'with wall above it');
+  assert.ok(!solidAt(boxes, [4.25, 1.5, 0]), 'you can see through the window');
+  assert.ok(solidAt(boxes, [4.25, 0.5, 0]) && solidAt(boxes, [4.25, 2.5, 0]), 'with wall below and above it');
+  assert.ok(solidAt(boxes, [0.5, 1.0, 0]) && solidAt(boxes, [2.7, 1.0, 0]) && solidAt(boxes, [5.5, 1.0, 0]), 'the rest is solid');
+});
+
+test('[Openings] a wall without openings is the plain box; overlapping and overhanging openings are handled', () => {
+  assert.deepEqual(extrudeWallWithOpenings(longWall, []), extrudeWallSegment(longWall));
+
+  const mesh = extrudeWallWithOpenings(longWall, [
+    { wallId: 'w', t0: 1 / 6, t1: 2 / 6, sill: 0, head: 2.1 }, // door x 1..2
+    { wallId: 'w', t0: 1.5 / 6, t1: 3 / 6, sill: 0.9, head: 2.1 }, // window x 1.5..3, overlapping the door
+    { wallId: 'w', t0: 5.5 / 6, t1: 1.2, sill: 1, head: 9 }, // past the wall's end and top: cut to the wall
+  ]);
+  const boxes = boxesOf(mesh);
+  assert.ok(!solidAt(boxes, [1.75, 0.5, 0]), 'the door part stays open to the floor');
+  assert.ok(solidAt(boxes, [2.5, 0.5, 0]), 'beside the door, the window keeps its sill');
+  assert.ok(!solidAt(boxes, [2.5, 1.5, 0]));
+  assert.ok(!solidAt(boxes, [5.9, 2.0, 0]) && solidAt(boxes, [5.9, 0.5, 0]), 'the clipped window runs to the wall top');
+  assert.ok(boxes.every((b) => b.max[0] <= 6 + 1e-9 && b.max[1] <= 2.8 + 1e-9), 'nothing sticks out of the wall');
+});

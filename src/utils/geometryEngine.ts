@@ -16,14 +16,6 @@ export interface WallSegment2D {
   end: Point2D;
   thickness: number;
   height: number;
-  hasDoor?: boolean;
-  doorPosition?: number; // 0.0 to 1.0 along segment
-  doorWidth?: number;
-  hasWindow?: boolean;
-  windowPosition?: number;
-  windowWidth?: number;
-  windowSillHeight?: number;
-  windowHeight?: number;
 }
 
 export interface Vertex3D {
@@ -113,11 +105,73 @@ export function distance2D(p1: Point2D, p2: Point2D): number {
  * and counter-clockwise (CCW) triangle winding for OpenGL back-face culling.
  */
 export function extrudeWallSegment(wall: WallSegment2D): Mesh3D {
-  const dx = wall.end.x - wall.start.x;
-  const dz = wall.end.z - wall.start.z;
+  return extrudeBox(wall.start, wall.end, wall.thickness || 0.2, 0, wall.height || 2.8);
+}
+
+/**
+ * A wall with its doors and windows cut out, as closed boxes: the wall is sliced along its length
+ * at every opening's edges, and each slice keeps the heights no opening covers. A door leaves a
+ * lintel above it; a window leaves a sill below and a lintel above. Every box is watertight with
+ * outward normals, so the sides of each hole (the jambs) are the end faces of its neighbours.
+ */
+export function extrudeWallWithOpenings(wall: WallSegment2D, openings: Opening[]): Mesh3D {
+  const length = distance2D(wall.start, wall.end);
+  const height = wall.height || 2.8;
+  const thickness = wall.thickness || 0.2;
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+  const cuts = openings
+    .map((o) => ({
+      from: clamp(Math.min(o.t0, o.t1), 0, 1) * length,
+      to: clamp(Math.max(o.t0, o.t1), 0, 1) * length,
+      sill: clamp(o.sill, 0, height),
+      head: clamp(o.head, 0, height),
+    }))
+    .filter((c) => c.to - c.from > 1e-4 && c.head - c.sill > 1e-4);
+  if (length < 1e-6 || cuts.length === 0) return extrudeWallSegment(wall);
+
+  // Solid height ranges of the slice between two cut positions: [0, height] minus every opening over it.
+  const solidRanges = (from: number, to: number): [number, number][] => {
+    const mid = (from + to) / 2;
+    const holes = cuts.filter((c) => c.from < mid && c.to > mid).sort((a, b) => a.sill - b.sill);
+    const ranges: [number, number][] = [];
+    let y = 0;
+    for (const h of holes) {
+      if (h.sill > y + 1e-4) ranges.push([y, h.sill]);
+      y = Math.max(y, h.head);
+    }
+    if (height > y + 1e-4) ranges.push([y, height]);
+    return ranges;
+  };
+
+  const stops = [...new Set([0, length, ...cuts.flatMap((c) => [c.from, c.to])])].sort((a, b) => a - b);
+  const slices: { from: number; to: number; ranges: [number, number][] }[] = [];
+  for (let i = 0; i + 1 < stops.length; i++) {
+    if (stops[i + 1] - stops[i] < 1e-6) continue;
+    const ranges = solidRanges(stops[i], stops[i + 1]);
+    const last = slices[slices.length - 1];
+    // Neighbouring slices with the same solid heights become one box.
+    if (last && JSON.stringify(last.ranges) === JSON.stringify(ranges)) last.to = stops[i + 1];
+    else slices.push({ from: stops[i], to: stops[i + 1], ranges });
+  }
+
+  const at = (s: number): Point2D => ({
+    x: wall.start.x + ((wall.end.x - wall.start.x) * s) / length,
+    z: wall.start.z + ((wall.end.z - wall.start.z) * s) / length,
+  });
+  const boxes: Mesh3D[] = [];
+  for (const slice of slices) {
+    for (const [y0, y1] of slice.ranges) boxes.push(extrudeBox(at(slice.from), at(slice.to), thickness, y0, y1));
+  }
+  return combineMeshes(boxes);
+}
+
+/** A closed box along the floor from `start` to `end`, `thickness` wide, between heights y0 and y1. */
+function extrudeBox(start: Point2D, end: Point2D, thickness: number, y0: number, y1: number): Mesh3D {
+  const dx = end.x - start.x;
+  const dz = end.z - start.z;
   const len = Math.hypot(dx, dz);
 
-  if (len < 1e-6) {
+  if (len < 1e-6 || y1 - y0 < 1e-6) {
     // Degenerate segment: zero-length protection
     return { vertices: [], indices: [] };
   }
@@ -130,25 +184,26 @@ export function extrudeWallSegment(wall: WallSegment2D): Mesh3D {
   const nx = -uz;
   const nz = ux;
 
-  const halfT = (wall.thickness || 0.2) / 2;
-  const h = wall.height || 2.8;
+  const halfT = thickness / 2;
+  const h = y1;
+  const b = y0;
 
-  // 4 bottom vertices (y = 0)
+  // 4 bottom vertices (y = b)
   // A: start + normal * halfT
   // B: start - normal * halfT
   // C: end   - normal * halfT
   // D: end   + normal * halfT
-  const Ax = wall.start.x + nx * halfT;
-  const Az = wall.start.z + nz * halfT;
+  const Ax = start.x + nx * halfT;
+  const Az = start.z + nz * halfT;
 
-  const Bx = wall.start.x - nx * halfT;
-  const Bz = wall.start.z - nz * halfT;
+  const Bx = start.x - nx * halfT;
+  const Bz = start.z - nz * halfT;
 
-  const Cx = wall.end.x - nx * halfT;
-  const Cz = wall.end.z - nz * halfT;
+  const Cx = end.x - nx * halfT;
+  const Cz = end.z - nz * halfT;
 
-  const Dx = wall.end.x + nx * halfT;
-  const Dz = wall.end.z + nz * halfT;
+  const Dx = end.x + nx * halfT;
+  const Dz = end.z + nz * halfT;
 
   const vertices: Vertex3D[] = [];
   const indices: number[] = [];
@@ -189,8 +244,8 @@ export function extrudeWallSegment(wall: WallSegment2D): Mesh3D {
 
   // 1. Front face (along +normal): A → D → Dt → At
   addQuad(
-    [Ax, 0, Az],
-    [Dx, 0, Dz],
+    [Ax, b, Az],
+    [Dx, b, Dz],
     [Dx, h, Dz],
     [Ax, h, Az],
     [nx, 0, nz]
@@ -198,8 +253,8 @@ export function extrudeWallSegment(wall: WallSegment2D): Mesh3D {
 
   // 2. Back face (along -normal): C → B → Bt → Ct
   addQuad(
-    [Cx, 0, Cz],
-    [Bx, 0, Bz],
+    [Cx, b, Cz],
+    [Bx, b, Bz],
     [Bx, h, Bz],
     [Cx, h, Cz],
     [-nx, 0, -nz]
@@ -207,8 +262,8 @@ export function extrudeWallSegment(wall: WallSegment2D): Mesh3D {
 
   // 3. Start cap (along -tangent): B → A → At → Bt
   addQuad(
-    [Bx, 0, Bz],
-    [Ax, 0, Az],
+    [Bx, b, Bz],
+    [Ax, b, Az],
     [Ax, h, Az],
     [Bx, h, Bz],
     [-ux, 0, -uz]
@@ -216,8 +271,8 @@ export function extrudeWallSegment(wall: WallSegment2D): Mesh3D {
 
   // 4. End cap (along +tangent): D → C → Ct → Dt
   addQuad(
-    [Dx, 0, Dz],
-    [Cx, 0, Cz],
+    [Dx, b, Dz],
+    [Cx, b, Cz],
     [Cx, h, Cz],
     [Dx, h, Dz],
     [ux, 0, uz]
@@ -234,10 +289,10 @@ export function extrudeWallSegment(wall: WallSegment2D): Mesh3D {
 
   // 6. Bottom face (along -Y): A → B → C → D  (CCW from below)
   addQuad(
-    [Ax, 0, Az],
-    [Bx, 0, Bz],
-    [Cx, 0, Cz],
-    [Dx, 0, Dz],
+    [Ax, b, Az],
+    [Bx, b, Bz],
+    [Cx, b, Cz],
+    [Dx, b, Dz],
     [0, -1, 0]
   );
 
