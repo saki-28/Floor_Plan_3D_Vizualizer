@@ -1,1 +1,127 @@
 @import "tailwindcss";
+
+/*
+ * FloorPlan3D design tokens.
+ * Light: the tasteskill "framed sheet" app style (seed 718736934): a tinted L-frame around a
+ * white sheet, one teal data hue, IBM Plex Sans. Dark: true neutrals derived from the skill's
+ * dark defaults (no navy), with the teal lifted to keep 4.5:1 on the dark sheet.
+ * Components only use the Tailwind colours mapped below (bg-surface, text-ink, border-line …),
+ * so both themes come from these variables alone.
+ */
+:root {
+  color-scheme: light;
+  --ground: #f9fbfc;  /* the frame: sidebar and top bar */
+  --surface: #ffffff; /* the sheet the work sits on */
+  --raised: #f4f6f8;  /* wells inside the sheet: the 3D canvas, image tiles */
+  --active: #ebedee;  /* selected nav item, pressed toggles */
+  --border: #e8eaec;
+  --rule: #f0f1f2;
+  --control: #cdced1;
+  --text: #131416;
+  --muted: #5d5f60;
+  --accent: #1b6c80;  /* the one data hue */
+  --accent-soft: #e4f0f3;
+  --positive: #1e7b4f;
+  --negative: #c4242a;
+  --warning: #92400e;
+  --chart-2: #2f70bb;
+  --chart-3: #a86f0c;
+  --primary: #131416;
+  --on-primary: #ffffff;
+  --pill-positive-bg: #dcfae5;
+  --pill-positive-ink: #04250e;
+  --pill-negative-bg: #ffedea;
+  --pill-negative-ink: #831c1e;
+  --pill-warning-bg: #fffbeb;
+  --pill-warning-ink: #92400e;
+  --pill-neutral-bg: #ebedee;
+  --pill-neutral-ink: #353736;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --ground: #0b0b0b;
+  --surface: #141414;
+  --raised: #1b1b1b;
+  --active: #262626;
+  --border: #2a2a2a;
+  --rule: #1f1f1f;
+  --control: #404040;
+  --text: #f2f2f2;
+  --muted: #a8a8a8;
+  --accent: #5fb4c8;
+  --accent-soft: #15292e;
+  --positive: #3fc07a;
+  --negative: #e5566f;
+  --warning: #e0a14a;
+  --chart-2: #6ea6e8;
+  --chart-3: #d6a347;
+  --primary: #f2f2f2;
+  --on-primary: #111111;
+  --pill-positive-bg: #172a1d;
+  --pill-positive-ink: #3fc07a;
+  --pill-negative-bg: #2c1a20;
+  --pill-negative-ink: #e5566f;
+  --pill-warning-bg: #2b2112;
+  --pill-warning-ink: #e0a14a;
+  --pill-neutral-bg: #262626;
+  --pill-neutral-ink: #d4d4d4;
+}
+
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+@theme inline {
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-active: var(--active);
+  --color-line: var(--border);
+  --color-rule: var(--rule);
+  --color-control: var(--control);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-positive: var(--positive);
+  --color-negative: var(--negative);
+  --color-warning: var(--warning);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-primary: var(--primary);
+  --color-on-primary: var(--on-primary);
+  --color-positive-soft: var(--pill-positive-bg);
+  --color-positive-ink: var(--pill-positive-ink);
+  --color-negative-soft: var(--pill-negative-bg);
+  --color-negative-ink: var(--pill-negative-ink);
+  --color-warning-soft: var(--pill-warning-bg);
+  --color-warning-ink: var(--pill-warning-ink);
+  --color-neutral-soft: var(--pill-neutral-bg);
+  --color-neutral-ink: var(--pill-neutral-ink);
+  --font-sans: "IBM Plex Sans", Inter, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 20px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
