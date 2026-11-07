@@ -1,5 +1,10 @@
 import { PageHeader, Tabs } from './ui';
 import React, { useState } from 'react';
+import { GRAPHICS_TEX, depthStep, depthValue, halfDepthDistance } from '../data/formulas';
+import { Formula, MathText, Tex } from './Formula';
+
+/** A length in metres, in the unit that reads best. */
+const formatLength = (m: number) => (m >= 1 ? `${m.toFixed(1)} m` : m >= 0.01 ? `${(m * 100).toFixed(1)} cm` : `${(m * 1000).toPrecision(2)} mm`);
 import {
   bresenhamLine,
   ddaLine,
@@ -89,8 +94,8 @@ export const CGAlgorithmsLab: React.FC = () => {
   return (
     <div className="flex min-h-full flex-col gap-5 lg:h-full">
       <PageHeader
-        title="Graphics lab"
-        description="Interactive demonstrations of the graphics algorithms behind the 3D viewer."
+        title="Graphics"
+        description="The graphics algorithms behind the 3D viewer, to try out: line drawing, the camera matrices, depth precision and shading."
       />
       <Tabs
         label="Demonstrations"
@@ -213,18 +218,10 @@ export const CGAlgorithmsLab: React.FC = () => {
 
                 <div className="bg-raised p-4 rounded-lg border border-line space-y-2 text-xs">
                   <h3 className="font-bold text-accent">Mathematical Derivation</h3>
-                  <p className="text-ink text-[13px] leading-relaxed">
-                    Given slope <code className="text-ink">m = dy / dx &lt; 1</code>, the initial decision parameter is:
-                  </p>
-                  <div className="bg-surface p-2 rounded num text-xs text-positive">
-                    d_0 = 2 \Delta y - \Delta x
-                  </div>
-                  <p className="text-ink text-[13px] leading-relaxed">
-                    At each step <code className="text-ink">x_{'{k+1}'} = x_k + 1</code>:
-                    <br />
-                    - If <code className="text-accent">d_k &lt; 0</code>: choose lower pixel <code className="text-ink">y_{'{k+1}'} = y_k</code>, update <code className="text-positive">d_{'{k+1}'} = d_k + 2\Delta y</code>.
-                    <br />
-                    - If <code className="text-accent">d_k \ge 0</code>: choose diagonal pixel <code className="text-ink">y_{'{k+1}'} = y_k + 1</code>, update <code className="text-positive">d_{'{k+1}'} = d_k + 2\Delta y - 2\Delta x</code>.
+                  <Formula tex={GRAPHICS_TEX.bresenhamStart} />
+                  <Formula tex={GRAPHICS_TEX.bresenhamStep} />
+                  <p className="text-[13px] leading-relaxed text-muted">
+                    <MathText>{GRAPHICS_TEX.bresenhamSymbols}</MathText>
                   </p>
                   <div className="pt-1 text-xs text-muted">
                     Total rasterized points: <span className="text-accent font-bold">{bresenhamPixels.length} pixels</span>
@@ -319,8 +316,8 @@ export const CGAlgorithmsLab: React.FC = () => {
                 <div className="text-xs font-bold text-muted   mb-2">
                   2. View (Camera) Space
                 </div>
-                <div className="num text-xs text-accent bg-surface p-2 rounded">
-                  V = glm::lookAt(eye, target, up)
+                <div className="rounded bg-surface p-2 text-[13px]">
+                  <Tex>{GRAPHICS_TEX.view}</Tex>
                 </div>
                 <p className="text-[13px] text-muted mt-2">
                   Transforms world coords into eye coordinates relative to camera orientation.
@@ -335,7 +332,7 @@ export const CGAlgorithmsLab: React.FC = () => {
                   [{clipCoords[0].toFixed(2)}, {clipCoords[1].toFixed(2)}, {clipCoords[2].toFixed(2)}, {clipCoords[3].toFixed(2)}]
                 </div>
                 <p className="text-[13px] text-muted mt-2">
-                  Multiplied by Projection Matrix: p_clip = P * V * M * p.
+                  Multiplied by the projection matrix: <Tex>{GRAPHICS_TEX.clip}</Tex>.
                 </p>
               </div>
 
@@ -347,7 +344,7 @@ export const CGAlgorithmsLab: React.FC = () => {
                   [{ndc[0].toFixed(3)}, {ndc[1].toFixed(3)}, {ndc[2].toFixed(3)}]
                 </div>
                 <p className="text-[13px] text-muted mt-2">
-                  Divided by w_clip: normalized to [-1, +1] cube for OpenGL rasterizer.
+                  Divided by <Tex>{'w_{\\text{clip}}'}</Tex>: <Tex>{GRAPHICS_TEX.ndc}</Tex>, the cube the rasterizer draws.
                 </p>
               </div>
             </div>
@@ -400,32 +397,39 @@ export const CGAlgorithmsLab: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="bg-surface p-3 rounded-lg border border-line num text-xs text-ink space-y-2">
-                  <div className="text-ink font-semibold">Non-Linear Depth Transformation:</div>
-                  <div className="text-positive">
-                    z_ndc = (far + near)/(near - far) + (2 * far * near) / ((near - far) * z_eye)
-                  </div>
+                <div className="space-y-1 rounded-lg border border-line bg-surface p-3">
+                  <div className="text-xs font-semibold text-ink">Depth is not linear in distance</div>
+                  <Formula tex={GRAPHICS_TEX.depth} />
+                  <p className="text-[13px] leading-relaxed text-muted">
+                    <MathText>{GRAPHICS_TEX.depthSymbols}</MathText>
+                  </p>
                 </div>
               </div>
 
               <div className="bg-raised p-4 rounded-lg border border-line space-y-3">
-                <h3 className="text-xs font-bold text-ink">24-Bit Depth Distribution Metrics</h3>
+                <h3 className="text-xs font-bold text-ink">A 24-bit depth buffer with these planes</h3>
                 <div className="space-y-2 text-xs">
-                  <div className="flex justify-between p-2 rounded bg-surface">
-                    <span className="text-muted">Total Available 24-bit Values:</span>
-                    <span className="num text-accent">2^{'{24}'} = 16,777,216</span>
+                  <div className="flex justify-between gap-3 rounded bg-surface p-2">
+                    <span className="text-muted">Depth values available</span>
+                    <span className="num text-ink">2²⁴ = 16,777,216</span>
                   </div>
-                  <div className="flex justify-between p-2 rounded bg-surface">
-                    <span className="text-muted">Precision clustered in first 10% of view range:</span>
-                    <span className="num text-ink font-bold">~89.4%</span>
+                  <div className="flex justify-between gap-3 rounded bg-surface p-2">
+                    <span className="text-muted">Half of them are used within</span>
+                    <span className="num font-semibold text-ink">{formatLength(halfDepthDistance(zNear, zFar))} of the camera</span>
                   </div>
-                  <div className="flex justify-between p-2 rounded bg-surface">
-                    <span className="text-muted">Precision in remaining 90% of view range:</span>
-                    <span className="num text-accent">~10.6%</span>
+                  <div className="flex justify-between gap-3 rounded bg-surface p-2">
+                    <span className="text-muted">Share used by the nearest 10% of the range</span>
+                    <span className="num text-ink">{(depthValue(zNear + 0.1 * (zFar - zNear), zNear, zFar) * 100).toFixed(1)}%</span>
+                  </div>
+                  <div className="flex justify-between gap-3 rounded bg-surface p-2">
+                    <span className="text-muted">Smallest depth step at 10 m</span>
+                    <span className="num text-ink">{formatLength(depthStep(10, zNear, zFar))}</span>
                   </div>
                 </div>
                 <p className="text-[13px] text-muted leading-relaxed pt-2">
-                  In architectural rendering, setting <code className="text-ink">zNear = 0.001</code> compresses all depth resolution into the first 2 centimeters, causing walls and coplanar floors to flicker (Z-fighting). For rooms, <code className="text-positive">zNear = 0.1</code> is mathematically optimal.
+                  Moving the near plane closer spends even more of the values right in front of the camera, and the steps far away grow. When the step at a
+                  wall's distance is larger than the gap between the wall and the floor or a door frame, the two flicker through each other (z-fighting).
+                  For rooms viewed from a few metres, a near plane of about 0.1 m keeps the steps far below a millimetre.
                 </p>
               </div>
             </div>
