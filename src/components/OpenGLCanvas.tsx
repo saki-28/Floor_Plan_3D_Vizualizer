@@ -41,6 +41,8 @@ interface OpenGLCanvasProps {
   selectedWallId: string | null;
   onSelectWall: (wallId: string | null) => void;
   theme: Theme;
+  /** Just the 3D view with its view buttons: no header, side panel or keyboard shortcuts (for a live preview beside the plan editor). */
+  compact?: boolean;
 }
 
 export type RenderStyle = 'architectural' | 'blueprint' | 'clay';
@@ -78,6 +80,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   selectedWallId,
   onSelectWall,
   theme,
+  compact = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -678,6 +681,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   // Keyboard: M measures, Esc clears, arrows turn and tilt, + and − zoom, F fits, 0 resets.
   const handleKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
   handleKeyRef.current = (e: KeyboardEvent) => {
+    if (compact) return; // the page around a compact preview owns the keyboard
     const t = e.target;
     if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -971,8 +975,8 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   const zoomLog = Math.log2(fitNow / cameraRadius);
 
   return (
-    <div className="flex min-h-full flex-col gap-5 lg:h-full">
-      <header className="flex flex-wrap items-start justify-between gap-4">
+    <div className={compact ? 'h-full' : 'flex min-h-full flex-col gap-5 lg:h-full'}>
+      {!compact && <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <h1 className="text-[22px] font-semibold leading-7">{title}</h1>
           <p className="num mt-1 text-muted">
@@ -990,12 +994,12 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
             Export OBJ
           </Button>
         </div>
-      </header>
+      </header>}
 
-      <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
+      <div className={compact ? 'h-full' : 'grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_280px]'}>
         <div
           ref={containerRef}
-          className={`relative h-[60vh] min-h-[360px] select-none overflow-hidden rounded-lg border border-line bg-raised lg:h-auto ${
+          className={`relative select-none overflow-hidden rounded-lg border border-line bg-raised ${compact ? 'h-full min-h-[220px]' : 'h-[60vh] min-h-[360px] lg:h-auto'} ${
             isMeasuring ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
           }`}
         >
@@ -1083,7 +1087,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
               </button>
             ))}
           </div>
-          <div className="absolute right-3 top-3 flex flex-col gap-2" role="toolbar" aria-label="Camera controls" aria-orientation="vertical">
+          {!compact && <div className="absolute right-3 top-3 flex flex-col gap-2" role="toolbar" aria-label="Camera controls" aria-orientation="vertical">
             {cameraButtons.map((group, i) => (
               <div key={i} className="flex flex-col rounded-md border border-line bg-surface p-0.5">
                 {group.map((b) => (
@@ -1103,9 +1107,9 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
                 ))}
               </div>
             ))}
-          </div>
+          </div>}
 
-          <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-end justify-between gap-2">
+          {!compact && <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-end justify-between gap-2">
             {isMeasuring ? (
               <div className="flex items-center gap-3 rounded-md border border-line bg-surface px-3 py-2 text-[13px]">
                 {measurePointA && activeMeasureTarget ? (
@@ -1132,10 +1136,10 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
             ) : (
               <span className="rounded-md bg-surface/80 px-2 py-1 text-xs text-muted">{navigationHint}</span>
             )}
-          </div>
+          </div>}
         </div>
 
-        <aside className="flex flex-col gap-6 lg:overflow-y-auto" aria-label="Model settings">
+        {!compact && <aside className="flex flex-col gap-6 lg:overflow-y-auto" aria-label="Model settings">
           <section>
             <SectionTitle>Plan</SectionTitle>
             <div className="rounded-md bg-raised p-3">
@@ -1261,7 +1265,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
               {Number.isFinite(stats.fps) && stats.fps > 0 ? stats.fps : 60} <span className="text-muted">fps</span>
             </KeyValue>
           </section>
-        </aside>
+        </aside>}
       </div>
     </div>
   );

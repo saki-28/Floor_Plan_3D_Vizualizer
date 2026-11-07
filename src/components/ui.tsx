@@ -26,6 +26,18 @@ export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { 
   />
 );
 
+/** A link that looks like a Button: for moving to another page, so it can also open in a new tab. */
+export const LinkButton: React.FC<React.AnchorHTMLAttributes<HTMLAnchorElement> & { variant?: ButtonVariant }> = ({
+  variant = 'secondary',
+  className = '',
+  ...props
+}) => (
+  <a
+    {...props}
+    className={`inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-md px-3 text-[13px] font-medium transition-colors ${BUTTON_STYLES[variant]} ${className}`}
+  />
+);
+
 export interface SegmentOption<T extends string> {
   value: T;
   label: string;
@@ -146,7 +158,7 @@ export function Tabs<T extends string>({
 }) {
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-line">
-      <div role="tablist" aria-label={label} className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+      <div role="tablist" aria-label={label} className="flex min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none]">
         {tabs.map((tab) => {
           const selected = tab.value === value;
           return (
