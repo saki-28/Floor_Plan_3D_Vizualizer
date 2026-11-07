@@ -20,7 +20,7 @@ export interface Phase {
   items: WorkItem[];
 }
 
-export const STATUS_DATE = '4 Nov 2026';
+export const STATUS_DATE = '5 Nov 2026';
 
 export const PHASES: Phase[] = [
   {
@@ -37,30 +37,30 @@ export const PHASES: Phase[] = [
     id: 'draw',
     name: 'Draw your own',
     items: [
-      { name: 'Drawing tools', weight: 8, done: 0.3, note: 'Wall ends can be dragged in the pipeline explainer; no real drawing yet' },
-      { name: 'Undo, redo and saving', weight: 5, done: 0.2, note: 'Edits are autosaved and can be saved to a file; no undo or redo yet' },
-      { name: 'Live 3D beside the drawing', weight: 5, done: 0.2, note: 'Edits already reach the 3D viewer, but on another screen' },
-      { name: 'Doors and windows on walls', weight: 4, done: 0.4, note: 'Added or removed per wall in the explainer; not yet placed or resized by dragging' },
-      { name: 'Home with the ways in', weight: 3, done: 1, note: 'This overview links the three ways in' },
+      { name: 'Drawing tools', weight: 8, done: 0.8, note: 'Edit plan draws walls corner by corner and moves wall ends or whole walls, snapping to wall ends, wall sides (T junctions) and a 10 cm grid; joined walls move together. Rooms and floors are not drawn yet' },
+      { name: 'Undo, redo and saving', weight: 5, done: 1, note: 'Undo and redo for every edit (one drag is one step, up to 100 steps), autosave in this browser, and Save to a file' },
+      { name: 'Live 3D beside the drawing', weight: 5, done: 0.9, note: 'A 3D preview beside the drawing updates with every edit; it does not yet highlight the selected wall' },
+      { name: 'Doors and windows on walls', weight: 4, done: 0.9, note: 'Placed with a click where they go, dragged along the wall, and sized by typing width, sill and height; not yet resized by dragging their ends' },
+      { name: 'Home with the ways in', weight: 3, done: 1, note: 'Start links the three ways in; How it works is a separate area with its own page links' },
     ],
   },
   {
     id: 'image',
     name: 'Image to 3D',
     items: [
-      { name: 'Lines to walls (step 7)', weight: 12, done: 0.6, note: 'Perfect on the 5 generated images; on all 400 CubiCasa5k test plans the rules reach 43% wall IoU (precision 53%, recall 69%). A trained wall, door and window model is being tested' },
+      { name: 'Lines to walls (step 7)', weight: 12, done: 0.6, note: 'Perfect on the 5 generated images; on all 400 CubiCasa5k test plans the rules reach 43% wall IoU and a trained model 74% (doors and windows 73%); the model is not in the app yet' },
       { name: 'Upload and clean-up (steps 1–6)', weight: 10, done: 0.9, note: 'Real OpenCV.js; tested on 5 generated images, no real scans yet' },
-      { name: 'Scale step and hand-off to the editor', weight: 4, done: 0.25, note: 'Detected walls open in the 3D viewer; no scale step or editor yet' },
-      { name: 'Explanation with real numbers', weight: 4, done: 0.9, note: 'All seven steps show their real image, settings, counts and time' },
+      { name: 'Scale step and hand-off to the editor', weight: 4, done: 0.5, note: 'Detected walls become the open plan, so they show in 3D and can be fixed in Edit plan; no scale step yet, so an upload\'s size is guessed from wall thickness' },
+      { name: 'Explanation with real numbers', weight: 4, done: 1, note: 'How it works → Pipeline explains the same run as Image to plan, step by step: its image, typeset formula, settings, counts and time, then the step into 3D' },
     ],
   },
   {
     id: 'across',
     name: 'Testing and report',
     items: [
-      { name: 'Automated tests', weight: 5, done: 0.8, note: '49 tests: geometry, door and window holes, plan files, image pipeline, wall detection, false-wall filters, scoring; 4 more for the training labels' },
-      { name: 'Accuracy and speed measurements', weight: 5, done: 0.8, note: 'Scripted CubiCasa5k evaluation (npm run eval:cubicasa) on the dataset\'s 400 test plans, for the rules or a trained model\'s masks, with a breakdown of where false walls fall; no 3D speed benchmarks yet' },
-      { name: 'Report, slides and demo', weight: 5, done: 0.1, note: 'Plan documents exist' },
+      { name: 'Automated tests', weight: 5, done: 0.8, note: '62 tests: geometry, door and window holes, plan files, plan editing and undo, image pipeline, wall detection, false-wall filters, scoring, every formula shown, and the results data; 4 more for the training labels' },
+      { name: 'Accuracy and speed measurements', weight: 5, done: 0.8, note: 'Scripted CubiCasa5k evaluation (npm run eval:cubicasa) on the dataset\'s 400 test plans, for the rules or a trained model\'s masks, with a breakdown of where false walls fall; shown on How it works → Results; no 3D speed benchmarks yet' },
+      { name: 'Report, slides and demo', weight: 5, done: 0.2, note: 'Plan documents exist; How it works now holds the results, sources and limits the report needs' },
     ],
   },
 ];
