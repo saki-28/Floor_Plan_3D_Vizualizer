@@ -4,11 +4,12 @@ One GPU, the Mac's GPU or the CPU:
     python3 -I training/train.py --data data/cubicasa5k/cubicasa5k --labels <dir> --out <dir> [--steps N] [--minutes M]
 Several GPUs (Kaggle's 2× T4), one process per GPU:
     torchrun --standalone --nproc_per_node=2 training/train.py ...
+The notebook (training/floorplan3d_walls.ipynb) calls train_worker directly, one forked process per GPU.
 
-Labels are drawn first with cubicasa.prepare_labels (train.py does it if they are missing). The
+Labels are drawn first with cubicasa.prepare_labels (train_worker does it if they are missing). The
 test predictions are written as class maps (0 background, 1 wall, 2 door, 3 window), one PNG per
 plan, for scripts/evaluate-cubicasa.ts --masks to score with the same truth and metric as the
-rule pipeline.
+rule pipeline. history.json records the loss and every validation, for plotting.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import math
 import os
 import sys
 import time
+from dataclasses import MISSING, asdict, dataclass, fields
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -66,40 +68,53 @@ def plan_scores(pred: np.ndarray, labels: np.ndarray) -> dict:
     }
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--data', required=True, help='folder holding train.txt, val.txt, test.txt')
-    ap.add_argument('--labels', required=True, help='folder of class-map PNGs (drawn if missing)')
-    ap.add_argument('--out', required=True)
-    ap.add_argument('--width', type=int, default=32)
-    ap.add_argument('--crop', type=int, default=512)
-    ap.add_argument('--batch', type=int, default=8, help='crops per GPU per step')
-    ap.add_argument('--per-plan', type=int, default=4, help='crops taken from each plan load')
-    ap.add_argument('--steps', type=int, default=24000)
-    ap.add_argument('--minutes', type=float, default=95, help='training time budget; the schedule ends at whichever comes first')
-    ap.add_argument('--lr', type=float, default=2e-3)
-    ap.add_argument('--val-plans', type=int, default=60)
-    ap.add_argument('--val-every', type=int, default=3000)
-    ap.add_argument('--test-limit', type=int, default=400)
-    ap.add_argument('--workers', type=int, default=2, help='data loader processes per GPU')
-    ap.add_argument('--device', default='auto')
-    args = ap.parse_args()
+@dataclass
+class TrainConfig:
+    data: str  # folder holding train.txt, val.txt, test.txt
+    labels: str  # folder of class-map PNGs (drawn if missing)
+    out: str
+    width: int = 32  # U-Net width: 32 is 7.8 M parameters
+    crop: int = 512
+    batch: int = 8  # crops per GPU per step
+    per_plan: int = 4  # crops taken from each plan load
+    steps: int = 24000
+    minutes: float = 95  # training time budget; the schedule ends at whichever comes first
+    lr: float = 2e-3
+    val_plans: int = 60
+    val_every: int = 3000
+    test_limit: int = 400
+    train_limit: int = 0  # use only the first N training plans (0 = all; for quick checks)
+    workers: int = 2  # data loader processes per GPU
+    log_every: int = 200
+    device: str = 'auto'
 
-    distributed = 'WORLD_SIZE' in os.environ and int(os.environ['WORLD_SIZE']) > 1
+
+def train_worker(rank: int, world: int, cfg: TrainConfig) -> None:
+    """Trains on one GPU (or the CPU) as process `rank` of `world`; with world > 1 the processes train one model together (DDP)."""
+    distributed = world > 1
     if distributed:
-        dist.init_process_group('nccl')
-        rank, world = dist.get_rank(), dist.get_world_size()
-        torch.cuda.set_device(int(os.environ.get('LOCAL_RANK', rank)))
-        device = torch.device('cuda', torch.cuda.current_device())
+        os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
+        os.environ.setdefault('MASTER_PORT', '29531')
+        if torch.cuda.is_available():
+            torch.cuda.set_device(rank % torch.cuda.device_count())
+            device = torch.device('cuda', torch.cuda.current_device())
+            dist.init_process_group('nccl', rank=rank, world_size=world, device_id=device)
+        else:
+            device = torch.device('cpu')
+            dist.init_process_group('gloo', rank=rank, world_size=world)
+        # A process forked from one that already used PyTorch's or OpenCV's CPU thread pools (the notebook) cannot safely use the
+        # pools it inherited. One thread is plenty: the GPUs do the work, and the data loaders are separate processes.
+        torch.set_num_threads(1)
+        cv2.setNumThreads(0)  # the same for OpenCV's thread pool; the data loaders inherit this
     else:
-        rank, world = 0, 1
-        name = args.device if args.device != 'auto' else ('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
+        name = cfg.device if cfg.device != 'auto' else ('cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu')
         device = torch.device(name)
     cuda = device.type == 'cuda'
     if cuda:
         torch.backends.cudnn.benchmark = True
-    os.makedirs(args.out, exist_ok=True)
-    log_file = open(os.path.join(args.out, 'log.txt'), 'a') if rank == 0 else None
+    os.makedirs(cfg.out, exist_ok=True)
+    log_file = open(os.path.join(cfg.out, 'log.txt'), 'a') if rank == 0 else None
+    history: dict = {'config': asdict(cfg), 'world': world, 'device': device.type, 'loss': [], 'val': []}
 
     def log(msg: str) -> None:
         if rank == 0:
@@ -108,35 +123,47 @@ def main() -> None:
             log_file.write(line + '\n')
             log_file.flush()
 
+    def record(kind: str, entry: dict) -> None:
+        if rank == 0:
+            history[kind].append(entry)
+            with open(os.path.join(cfg.out, 'history.json'), 'w') as f:
+                json.dump(history, f, indent=1)
+
     def barrier() -> None:
         if distributed:
             dist.barrier()
 
-    if rank == 0 and not os.path.exists(os.path.join(args.labels, '.done')):
+    if rank == 0 and not os.path.exists(os.path.join(cfg.labels, '.done')):
         t = time.time()
-        made = prepare_labels(args.data, args.labels)
-        open(os.path.join(args.labels, '.done'), 'w').close()
+        made = prepare_labels(cfg.data, cfg.labels)
+        open(os.path.join(cfg.labels, '.done'), 'w').close()
         log(f'labels drawn for {made} plans in {time.time() - t:.0f} s')
     barrier()
 
-    train_plans = read_split(args.data, 'train')
-    val_plans = read_split(args.data, 'val')[:args.val_plans]
-    test_plans = read_split(args.data, 'test')[:args.test_limit]
-    dataset = TrainCrops(args.data, args.labels, train_plans, size=args.crop, per_plan=args.per_plan)
+    train_plans = read_split(cfg.data, 'train')
+    if cfg.train_limit:
+        train_plans = train_plans[:cfg.train_limit]
+    val_plans = read_split(cfg.data, 'val')[:cfg.val_plans]
+    test_plans = read_split(cfg.data, 'test')[:cfg.test_limit]
+    dataset = TrainCrops(cfg.data, cfg.labels, train_plans, size=cfg.crop, per_plan=cfg.per_plan)
     sampler = DistributedSampler(dataset, shuffle=True) if distributed else RandomSampler(dataset)
-    loader = DataLoader(dataset, batch_size=max(1, args.batch // args.per_plan), sampler=sampler, num_workers=args.workers,
-                        collate_fn=collate, pin_memory=cuda, drop_last=True, persistent_workers=args.workers > 0,
-                        prefetch_factor=4 if args.workers > 0 else None)
+    loader = DataLoader(dataset, batch_size=max(1, cfg.batch // cfg.per_plan), sampler=sampler, num_workers=cfg.workers,
+                        collate_fn=collate, pin_memory=cuda, drop_last=True, persistent_workers=cfg.workers > 0,
+                        prefetch_factor=4 if cfg.workers > 0 else None)
 
-    net = UNet(args.width).to(device)
+    net = UNet(cfg.width).to(device)
     if cuda:
         net = net.to(memory_format=torch.channels_last)
-    model = torch.nn.parallel.DistributedDataParallel(net, device_ids=[device.index]) if distributed else net
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    model = (
+        # Gradients live inside DDP's communication buckets, so their memory layout always matches (and is not copied).
+        torch.nn.parallel.DistributedDataParallel(net, device_ids=[device.index] if cuda else None, gradient_as_bucket_view=True)
+        if distributed else net
+    )
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=1e-4)
     scaler = torch.amp.GradScaler('cuda', enabled=cuda)
     params = sum(p.numel() for p in net.parameters()) / 1e6
     log(f'{world} × {device.type}, {len(train_plans)} train plans, {params:.1f} M params, '
-        f'{args.batch * world} crops per step, up to {args.steps} steps or {args.minutes:.0f} min')
+        f'{cfg.batch * world} crops per step, up to {cfg.steps} steps or {cfg.minutes:.0f} min')
 
     def evaluate(plans: list[str], pred_dir: str | None = None) -> tuple[dict, list[dict]]:
         net.eval()
@@ -144,8 +171,8 @@ def main() -> None:
         for i, plan in enumerate(plans):
             if i % world != rank:
                 continue
-            gray = cv2.imread(os.path.join(args.data, plan, 'F1_scaled.png'), cv2.IMREAD_GRAYSCALE)
-            labels = cv2.imread(os.path.join(args.labels, plan_name(plan) + '.png'), cv2.IMREAD_UNCHANGED)
+            gray = cv2.imread(os.path.join(cfg.data, plan, 'F1_scaled.png'), cv2.IMREAD_GRAYSCALE)
+            labels = cv2.imread(os.path.join(cfg.labels, plan_name(plan) + '.png'), cv2.IMREAD_UNCHANGED)
             t = time.time()
             pred = predict_plan(net, ink(gray), device)
             ms = (time.time() - t) * 1000
@@ -156,7 +183,7 @@ def main() -> None:
         sums = torch.tensor([sum(r['iou'] for r in rows), sum(r['precision'] for r in rows), sum(r['recall'] for r in rows),
                              sum(r['openings_iou'] for r in rows if r['openings_iou'] is not None),
                              sum(1 for r in rows if r['openings_iou'] is not None), len(rows)], dtype=torch.float64,
-                            device=device if distributed else 'cpu')
+                            device=device if distributed and cuda else 'cpu')
         if distributed:
             dist.all_reduce(sums)
         s = sums.tolist()
@@ -168,10 +195,11 @@ def main() -> None:
             torch.save({'state': net.state_dict(), 'config': net.config, 'step': step, 'val': metrics}, path)
 
     start = time.time()
-    budget = args.minutes * 60
+    budget = cfg.minutes * 60
     step, time_frac, best = 0, 0.0, -1.0
     seen = 0
-    window_start, window_loss = time.time(), 0.0
+    sample_every = max(1, cfg.log_every // 4)  # the loss is read (a GPU sync) only this often
+    window_start, window_loss, window_samples = time.time(), 0.0, 0
     epoch = 0
     model.train()
     done = False
@@ -179,12 +207,12 @@ def main() -> None:
         if distributed:
             sampler.set_epoch(epoch)
         for x, y in loader:
-            progress = max(step / args.steps, time_frac)
+            progress = max(step / cfg.steps, time_frac)
             if progress >= 1:
                 done = True
                 break
             warm = min(1.0, (step + 1) / 300)
-            lr = args.lr * warm * (0.02 + 0.98 * 0.5 * (1 + math.cos(math.pi * progress)))
+            lr = cfg.lr * warm * (0.02 + 0.98 * 0.5 * (1 + math.cos(math.pi * progress)))
             for g in opt.param_groups:
                 g['lr'] = lr
             x = x.to(device, non_blocking=True)
@@ -201,25 +229,30 @@ def main() -> None:
             scaler.update()
             step += 1
             seen += x.shape[0] * world
-            window_loss += loss.item() if step % 50 == 0 else 0.0
+            if step % sample_every == 0:
+                window_loss += loss.item()
+                window_samples += 1
 
             if step % 50 == 0:
                 frac = torch.tensor([(time.time() - start) / budget], device=device)
                 if distributed:
                     dist.all_reduce(frac, op=dist.ReduceOp.MAX)
                 time_frac = float(frac.item())
-            if step % 200 == 0:
-                rate = 200 * x.shape[0] * world / (time.time() - window_start)
-                log(f'step {step:6d}  loss {window_loss / 4:.4f}  lr {lr:.2e}  {rate:5.1f} crops/s  '
-                    f'{(time.time() - start) / 60:5.1f} min  {seen / 1000:.0f}k crops')
-                window_start, window_loss = time.time(), 0.0
-            if step % args.val_every == 0:
+            if step % cfg.log_every == 0:
+                rate = cfg.log_every * x.shape[0] * world / (time.time() - window_start)
+                minutes = (time.time() - start) / 60
+                mean_loss = window_loss / max(window_samples, 1)
+                log(f'step {step:6d}  loss {mean_loss:.4f}  lr {lr:.2e}  {rate:5.1f} crops/s  {minutes:5.1f} min  {seen / 1000:.0f}k crops')
+                record('loss', {'step': step, 'loss': mean_loss, 'lr': lr, 'crops_per_s': rate, 'minutes': minutes})
+                window_start, window_loss, window_samples = time.time(), 0.0, 0
+            if step % cfg.val_every == 0:
                 metrics, _ = evaluate(val_plans)
                 log(f'val on {metrics["plans"]} plans: wall IoU {metrics["iou"]:.3f} (precision {metrics["precision"]:.3f}, '
                     f'recall {metrics["recall"]:.3f}), door+window IoU {metrics["openings_iou"]:.3f}')
+                record('val', {'step': step, 'minutes': (time.time() - start) / 60, **metrics})
                 if metrics['iou'] > best:
                     best = metrics['iou']
-                    save(os.path.join(args.out, 'model_best.pt'), step, metrics)
+                    save(os.path.join(cfg.out, 'model_best.pt'), step, metrics)
                 window_start = time.time()
         epoch += 1
 
@@ -227,38 +260,55 @@ def main() -> None:
     log(f'final val on {metrics["plans"]} plans: wall IoU {metrics["iou"]:.3f} (precision {metrics["precision"]:.3f}, '
         f'recall {metrics["recall"]:.3f}), door+window IoU {metrics["openings_iou"]:.3f}  after {step} steps, {seen / 1000:.0f}k crops, '
         f'{(time.time() - start) / 60:.1f} min')
-    save(os.path.join(args.out, 'model_last.pt'), step, metrics)
+    record('val', {'step': step, 'minutes': (time.time() - start) / 60, 'final': True, **metrics})
+    save(os.path.join(cfg.out, 'model_last.pt'), step, metrics)
     if metrics['iou'] > best:
         best = metrics['iou']
-        save(os.path.join(args.out, 'model_best.pt'), step, metrics)
+        save(os.path.join(cfg.out, 'model_best.pt'), step, metrics)
     barrier()
 
     if test_plans:
-        state = torch.load(os.path.join(args.out, 'model_best.pt'), map_location=device)
+        state = torch.load(os.path.join(cfg.out, 'model_best.pt'), map_location=device)
         net.load_state_dict(state['state'])
-        pred_dir = os.path.join(args.out, 'pred_test')
+        pred_dir = os.path.join(cfg.out, 'pred_test')
         os.makedirs(pred_dir, exist_ok=True)
         summary, rows = evaluate(test_plans, pred_dir)
-        with open(os.path.join(args.out, f'test_rows_{rank}.json'), 'w') as f:
+        with open(os.path.join(cfg.out, f'test_rows_{rank}.json'), 'w') as f:
             json.dump(rows, f)
         barrier()
         if rank == 0:
             all_rows = []
             for r in range(world):
-                path = os.path.join(args.out, f'test_rows_{r}.json')
+                path = os.path.join(cfg.out, f'test_rows_{r}.json')
                 all_rows += json.load(open(path))
                 os.remove(path)
             all_rows.sort(key=lambda r: r['plan'])
             summary['median_iou'] = float(np.median([r['iou'] for r in all_rows]))
             summary['ms_per_plan'] = float(np.mean([r['ms'] for r in all_rows]))
             summary['best_step'] = state['step']
-            json.dump({'summary': summary, 'rows': all_rows}, open(os.path.join(args.out, 'test_results.json'), 'w'), indent=1)
+            json.dump({'summary': summary, 'rows': all_rows}, open(os.path.join(cfg.out, 'test_results.json'), 'w'), indent=1)
             log(f'test on {summary["plans"]} plans (checkpoint of step {state["step"]}): wall IoU {summary["iou"]:.3f} '
                 f'(median {summary["median_iou"]:.3f}, precision {summary["precision"]:.3f}, recall {summary["recall"]:.3f}), '
                 f'door+window IoU {summary["openings_iou"]:.3f}, {summary["ms_per_plan"]:.0f} ms per plan')
     barrier()
+    if log_file:
+        log_file.close()
     if distributed:
         dist.destroy_process_group()
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    types = {'int': int, 'float': float, 'str': str}
+    for f in fields(TrainConfig):
+        flag = '--' + f.name.replace('_', '-')
+        if f.default is MISSING:
+            ap.add_argument(flag, dest=f.name, required=True)
+        else:
+            ap.add_argument(flag, dest=f.name, type=types[str(f.type)], default=f.default)
+    cfg = TrainConfig(**vars(ap.parse_args()))
+    # torchrun sets RANK and WORLD_SIZE (and MASTER_ADDR / MASTER_PORT) for each process it starts.
+    train_worker(int(os.environ.get('RANK', 0)), int(os.environ.get('WORLD_SIZE', 1)), cfg)
 
 
 if __name__ == '__main__':
