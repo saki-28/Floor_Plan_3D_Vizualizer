@@ -78,16 +78,6 @@ export interface FloorPlanDataset {
 
 export type VisionStage = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-export interface VisionStageInfo {
-  id: VisionStage;
-  title: string;
-  shortName: string;
-  mathExplanation: string;
-  opencvFunction: string;
-  parameters: string;
-  academicRationale: string;
-}
-
 // ---------------------------------------------------------------------------
 // B2 Data Contract — Explainability types (R4)
 // ---------------------------------------------------------------------------

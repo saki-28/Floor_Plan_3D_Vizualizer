@@ -152,6 +152,9 @@ def prepare_labels(root: str, out_dir: str, splits=('train', 'val', 'test'), wor
     """Draws every plan's class map once into out_dir/<plan_name>.png. Returns how many were made."""
     os.makedirs(out_dir, exist_ok=True)
     jobs = [(root, plan, out_dir) for split in splits for plan in read_split(root, split)]
+    jobs = [job for job in jobs if not os.path.exists(os.path.join(out_dir, plan_name(job[1]) + '.png'))]
+    if not jobs:
+        return 0
     with Pool(workers or os.cpu_count()) as pool:
         return sum(pool.imap_unordered(_prepare_one, jobs, chunksize=16))
 

@@ -3,51 +3,27 @@
  * test plan or an uploaded image. The selected stage (the walls, by default) gets
  * the big view under a strip of all seven; the side panel holds the summary, the
  * score against the real walls when the image is a test plan, and the settings.
- * The detected walls can be opened in the 3D viewer.
+ * The detected walls can be opened in the 3D viewer. The run is the one How it works → Pipeline
+ * explains, step by step (src/vision/pipelineSession.ts).
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Box, ImageUp, Loader2, RotateCcw } from 'lucide-react';
-import type { FloorPlanDataset, Segment2D } from '../types/floorplan';
-import { describeCvError, loadOpenCv, type CV } from '../vision/opencv';
+import type { FloorPlanDataset } from '../types/floorplan';
+import type { StageId } from '../vision/pipeline';
+import type { TunableKey } from '../vision/pipelineParams';
 import {
-  HOUGH_COLORS,
-  REMOVED_COLOR,
-  WALL_COLORS,
-  runPipeline,
-  type PipelineRun,
-  type RgbaImage,
-  type StageId,
-} from '../vision/pipeline';
-import type { PipelineOptions, TunableKey } from '../vision/pipelineParams';
+  loadTestPlan,
+  loadUploadedImage,
+  planFromRun,
+  setOverrides,
+  useOpenCv,
+  usePipelineRunner,
+  usePipelineSession,
+} from '../vision/pipelineSession';
 import { scoreWalls } from '../vision/scoreWalls';
-import { guessMetersPerPixel, wallsToPlan } from '../vision/wallsToPlan';
+import { StageCanvas, StageLegend, formatEntries, formatMs } from './stageVisuals';
 import { Button, KeyValue, SectionTitle, Slider } from './ui';
-
-interface TestPlanEntry {
-  id: string;
-  file: string;
-  name: string;
-  description: string;
-  wallCount: number;
-  pixelsPerMeter: number;
-  /** Solid wall pieces between openings, as centerlines in image pixels. */
-  groundTruthPieces: Segment2D[];
-}
-
-interface SourceImage {
-  label: string;
-  image: RgbaImage;
-  /** Known walls and scale (synthetic test plans only). */
-  wallCount?: number;
-  truth?: Segment2D[];
-  pixelsPerMeter?: number;
-  note?: string;
-}
-
-const TEST_PLAN_DIR = `${import.meta.env.BASE_URL}test-plans/`;
-/** Huge photos are scaled down while decoding so they fit comfortably in WASM memory. */
-const MAX_DECODE_SIDE = 4096;
 
 const STAGE_NOTES: Record<StageId, string> = {
   1: 'The longest side is capped, so the settings behave the same on every image.',
@@ -68,181 +44,19 @@ const TUNABLES: { key: TunableKey; label: string; min: number; max: number; step
   { key: 'maxLineGap', label: 'Max line gap', min: 0, max: 50, step: 1, unit: ' px', hint: 'Step 6: gaps up to this are joined' },
 ];
 
-const rgb = (c: [number, number, number]) => `rgb(${c.join(',')})`;
-const formatMs = (ms: number) => `${ms < 10 ? ms.toFixed(1) : Math.round(ms)} ms`;
-const formatEntries = (entries: Record<string, string | number>) =>
-  Object.entries(entries)
-    .map(([key, value]) => `${key} ${value}`)
-    .join(' · ');
-
-async function decodeImage(blob: Blob): Promise<{ image: RgbaImage; downscaled: boolean }> {
-  const bitmap = await createImageBitmap(blob);
-  try {
-    const scale = Math.min(1, MAX_DECODE_SIDE / Math.max(bitmap.width, bitmap.height));
-    const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(bitmap.height * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Canvas 2D is not available');
-    // Transparent pixels would read as black ink, so composite onto white paper.
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, width, height);
-    ctx.drawImage(bitmap, 0, 0, width, height);
-    return { image: { width, height, data: ctx.getImageData(0, 0, width, height).data }, downscaled: scale < 1 };
-  } finally {
-    bitmap.close();
-  }
-}
-
-const StageCanvas: React.FC<{ image: RgbaImage; className?: string; label: string }> = ({ image, className, label }) => {
-  const ref = useRef<HTMLCanvasElement>(null);
-  useEffect(() => {
-    const canvas = ref.current;
-    if (!canvas) return;
-    canvas.width = image.width;
-    canvas.height = image.height;
-    canvas.getContext('2d')?.putImageData(new ImageData(image.data, image.width, image.height), 0, 0);
-  }, [image]);
-  return <canvas ref={ref} className={className} role="img" aria-label={label} />;
-};
-
-const Swatch: React.FC<{ color: string; label: string }> = ({ color, label }) => (
-  <span className="flex items-center gap-1.5">
-    <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: color }} />
-    {label}
-  </span>
-);
-
-const StageLegend: React.FC<{ id: StageId }> = ({ id }) => {
-  if (id === 4) {
-    return (
-      <div className="flex gap-4 text-xs text-muted">
-        <Swatch color="#ffffff" label="Kept" />
-        <Swatch color={rgb(REMOVED_COLOR)} label="Removed" />
-      </div>
-    );
-  }
-  if (id === 7) {
-    return (
-      <div className="flex gap-4 text-xs text-muted">
-        <Swatch color={rgb(WALL_COLORS.centerline)} label="Wall centerline" />
-        <Swatch color={rgb(WALL_COLORS.body)} label="Wall thickness" />
-        <Swatch color={rgb(WALL_COLORS.setAside)} label="Set aside (slanted)" />
-      </div>
-    );
-  }
-  if (id === 6) {
-    return (
-      <div className="flex gap-4 text-xs text-muted">
-        <Swatch color={rgb(HOUGH_COLORS.horizontal)} label="Horizontal" />
-        <Swatch color={rgb(HOUGH_COLORS.vertical)} label="Vertical" />
-        <Swatch color={rgb(HOUGH_COLORS.oblique)} label="Slanted" />
-      </div>
-    );
-  }
-  return null;
-};
-
 export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) => void }> = ({ onOpenIn3D }) => {
-  const [cv, setCv] = useState<CV | null>(null);
-  const [cvError, setCvError] = useState<string | null>(null);
-  const [testPlans, setTestPlans] = useState<TestPlanEntry[]>([]);
-  const [selectedPlanId, setSelectedPlanId] = useState('');
-  const [source, setSource] = useState<SourceImage | null>(null);
-  const [sourceError, setSourceError] = useState<string | null>(null);
-  const [overrides, setOverrides] = useState<Partial<PipelineOptions>>({});
-  const [run, setRun] = useState<PipelineRun | null>(null);
-  const [runError, setRunError] = useState<string | null>(null);
-  const [running, setRunning] = useState(false);
+  // The image, settings and run are shared with How it works → Pipeline (pipelineSession.ts).
+  const { cv, error: cvError } = useOpenCv();
+  usePipelineRunner(cv);
+  const { testPlans, selectedPlanId, source, sourceError, overrides, run, runError, running } = usePipelineSession();
   const [stageId, setStageId] = useState<StageId>(7);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Only the latest image request may set the source (fast clicking between plans).
-  const requestRef = useRef(0);
 
-  useEffect(() => {
-    let alive = true;
-    loadOpenCv()
-      .then(({ cv }) => alive && setCv(cv))
-      .catch((err) => alive && setCvError(describeCvError(null, err)));
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const loadTestPlan = useCallback(async (plan: TestPlanEntry) => {
-    const request = ++requestRef.current;
-    setSelectedPlanId(plan.id);
-    setSourceError(null);
-    try {
-      const response = await fetch(`${TEST_PLAN_DIR}${plan.file}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const { image } = await decodeImage(await response.blob());
-      if (request !== requestRef.current) return;
-      setOverrides({});
-      setSource({ label: plan.name, image, wallCount: plan.wallCount, truth: plan.groundTruthPieces, pixelsPerMeter: plan.pixelsPerMeter });
-    } catch (err) {
-      if (request === requestRef.current) setSourceError(`Could not load ${plan.file}: ${describeCvError(null, err)}`);
-    }
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    fetch(`${TEST_PLAN_DIR}manifest.json`)
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json() as Promise<{ plans: TestPlanEntry[] }>;
-      })
-      .then((manifest) => {
-        if (!alive) return;
-        setTestPlans(manifest.plans);
-        if (manifest.plans[0]) loadTestPlan(manifest.plans[0]);
-      })
-      .catch((err) => alive && setSourceError(`Could not load the test-plan list: ${describeCvError(null, err)}`));
-    return () => {
-      alive = false;
-    };
-  }, [loadTestPlan]);
-
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = ''; // so picking the same file again still fires
-    if (!file) return;
-    const request = ++requestRef.current;
-    setSourceError(null);
-    try {
-      const { image, downscaled } = await decodeImage(file);
-      if (request !== requestRef.current) return;
-      setSelectedPlanId('');
-      setOverrides({});
-      setSource({
-        label: file.name,
-        image,
-        note: downscaled ? `Scaled to ${image.width}×${image.height} while loading.` : undefined,
-      });
-    } catch (err) {
-      if (request === requestRef.current) setSourceError(`Could not read ${file.name}: ${describeCvError(null, err)}`);
-    }
+    if (file) void loadUploadedImage(file);
   };
-
-  useEffect(() => {
-    if (!cv || !source) return;
-    setRunning(true);
-    // Debounces slider drags, and lets the busy state paint before the synchronous run.
-    const timer = window.setTimeout(() => {
-      try {
-        setRun(runPipeline(cv, source.image, overrides));
-        setRunError(null);
-      } catch (err) {
-        setRun(null);
-        setRunError(`The pipeline failed: ${describeCvError(cv, err)}`);
-      } finally {
-        setRunning(false);
-      }
-    }, 150);
-    return () => window.clearTimeout(timer);
-  }, [cv, source, overrides]);
 
   const stats = run?.stats;
   // Stage 1 may shrink the image; ground truth and scale are in input pixels.
@@ -261,16 +75,7 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
   }, [run, source, resize]);
   const calibrated = source?.pixelsPerMeter !== undefined;
   const openIn3D = () => {
-    if (!run || !source || !onOpenIn3D) return;
-    const metersPerPixel = source.pixelsPerMeter ? 1 / (source.pixelsPerMeter * resize) : guessMetersPerPixel(run.walls);
-    onOpenIn3D(
-      wallsToPlan(run.walls, metersPerPixel, {
-        name: `Detected: ${source.label}`,
-        width: run.workingSize.width,
-        height: run.workingSize.height,
-        skewDeg: run.vector.skewDeg,
-      }),
-    );
+    if (run && source && onOpenIn3D) onOpenIn3D(planFromRun(run, source).plan);
   };
   const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
   const stage = run?.stages.find((s) => s.id === stageId) ?? null;
@@ -464,7 +269,7 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
                   step={t.step}
                   disabled={!run}
                   hint={t.hint}
-                  onChange={(v) => setOverrides((prev) => ({ ...prev, [t.key]: v }))}
+                  onChange={(v) => setOverrides({ ...overrides, [t.key]: v })}
                 />
               );
             })}

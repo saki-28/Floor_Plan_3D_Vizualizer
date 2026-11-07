@@ -26,6 +26,9 @@
   --warning: #92400e;
   --chart-2: #2f70bb;
   --chart-3: #a86f0c;
+  /* Results charts: the rules and the trained model (checked for colour-blind separation). */
+  --series-rules: #a86f0c;
+  --series-model: #2f70bb;
   --primary: #131416;
   --on-primary: #ffffff;
   --pill-positive-bg: #dcfae5;
@@ -56,6 +59,8 @@
   --warning: #e0a14a;
   --chart-2: #6ea6e8;
   --chart-3: #d6a347;
+  --series-rules: #c98500;
+  --series-model: #3987e5;
   --primary: #f2f2f2;
   --on-primary: #111111;
   --pill-positive-bg: #172a1d;
@@ -87,6 +92,8 @@
   --color-warning: var(--warning);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
+  --color-series-rules: var(--series-rules);
+  --color-series-model: var(--series-model);
   --color-primary: var(--primary);
   --color-on-primary: var(--on-primary);
   --color-positive-soft: var(--pill-positive-bg);
