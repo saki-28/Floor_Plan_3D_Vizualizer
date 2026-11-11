@@ -6,7 +6,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { FloorPlanDataset, Opening2D, WallSegment2D } from '../types/floorplan.ts';
-import { addWall, fitPosition, moveWall, moveWallEnd, nearestWall, placeOpening, setWallLength, snapPoint, updateOpening, wallLength } from './planEditing.ts';
+import {
+  addRoom,
+  addWall,
+  fitPosition,
+  moveWall,
+  moveWallEnd,
+  nearestWall,
+  parseTyped,
+  placeOpening,
+  pointAtLength,
+  setWallLength,
+  setWallThickness,
+  snapPoint,
+  updateOpening,
+  wallLength,
+} from './planEditing.ts';
 import { initialPlanState, planReducer } from '../data/planHistory.ts';
 
 const wall = (id: string, x1: number, z1: number, x2: number, z2: number): WallSegment2D => ({
@@ -98,4 +113,52 @@ test('[Edit] undo and redo step through edits; one drag is one step; a new plan 
   assert.equal(s.future.length, 0, 'a new edit drops the redo steps');
   s = planReducer(s, { type: 'replace', plan });
   assert.deepEqual([s.past.length, s.future.length], [0, 0]);
+});
+
+test('[Edit] the Room tool makes four walls joined at their corners, from two corners in any order', () => {
+  const made = addRoom([], { x: 5, z: 4 }, { x: 0, z: 0 }, 0.3)!;
+  assert.equal(made.walls.length, 4);
+  assert.ok(made.walls.every((w) => w.thickness === 0.3));
+  for (let i = 0; i < 4; i++) assert.deepEqual(made.walls[i].end, made.walls[(i + 1) % 4].start, 'each wall starts where the last one ends');
+  assert.deepEqual(made.walls.map(wallLength), [5, 4, 5, 4]);
+  assert.equal(addRoom([], { x: 0, z: 0 }, { x: 0.3, z: 4 }), null, 'too narrow to be a room');
+  assert.equal(setWallThickness(made.walls, made.ids[0], 0.1)[0].thickness, 0.1);
+});
+
+test('[Edit] typed lengths and sizes: 3.5, 5x4, 5*4, a decimal comma; nonsense is refused', () => {
+  assert.deepEqual(parseTyped('3.5'), [3.5]);
+  assert.deepEqual(parseTyped('5x4'), [5, 4]);
+  assert.deepEqual(parseTyped('5*4,5'), [5, 4.5]);
+  for (const bad of ['', 'x4', '5x', '0', '1x2x3', '.']) assert.equal(parseTyped(bad), null, bad);
+});
+
+test('[Edit] a typed length goes the way the pointer points, kept level when the pointer is nearly level', () => {
+  assert.deepEqual(pointAtLength({ x: 0, z: 0 }, { x: 3, z: 0.2 }, 4), { x: 4, z: 0 }, 'within 8° of level: straight along x');
+  assert.deepEqual(pointAtLength({ x: 1, z: 1 }, { x: 1, z: -5 }, 2.5), { x: 1, z: -1.5 }, 'straight up the screen');
+  const slanted = pointAtLength({ x: 0, z: 0 }, { x: 3, z: 1 }, 1)!;
+  assert.ok(Math.abs(Math.hypot(slanted.x, slanted.z) - 1) < 1e-6 && slanted.z > 0.2, 'a clearly slanted pointer keeps its slant');
+  assert.equal(pointAtLength({ x: 0, z: 0 }, { x: 0, z: 0 }, 2), null);
+});
+
+test("[Edit] a drawn plan's rooms follow its walls through edits and undo; hand-made rooms stay", () => {
+  const blank: FloorPlanDataset = {
+    id: 'b', name: 'B', description: '', difficulty: 'Clean Orthogonal', widthPx: 800, heightPx: 600, scale: 0.015, u0: 400, v0: 300,
+    walls: [], openings: [], rooms: [], furniture: [],
+  };
+  let s = initialPlanState(blank);
+  const first = addRoom([], { x: 0, z: 0 }, { x: 4, z: 3 }, 0.2)!;
+  s = planReducer(s, { type: 'edit', walls: first.walls, openings: [] });
+  assert.equal(s.plan.rooms.length, 1);
+  assert.equal(s.plan.rooms[0].areaSqM, 10.6, '3.8 × 2.8 m inside 0.2 m walls, near enough');
+  s = planReducer(s, { type: 'renameRoom', id: s.plan.rooms[0].id, name: 'Kitchen' });
+  const second = addRoom(s.plan.walls, { x: 4, z: 0 }, { x: 7, z: 3 }, 0.2)!;
+  s = planReducer(s, { type: 'edit', walls: second.walls, openings: [] });
+  assert.deepEqual(s.plan.rooms.map((r) => r.name).sort(), ['Kitchen', 'Room 1'], 'the shared wall makes two rooms; the first keeps its name');
+  s = planReducer(s, { type: 'undo' });
+  assert.deepEqual(s.plan.rooms.map((r) => r.name), ['Kitchen']);
+
+  const sample = { ...blank, walls: first.walls, rooms: [{ id: 'living', name: 'Living', color: '#fff', corners: [{ x: 0, z: 0 }, { x: 1, z: 0 }, { x: 1, z: 1 }], areaSqM: 1, type: 'living' as const }] };
+  let t = initialPlanState(sample);
+  t = planReducer(t, { type: 'edit', walls: moveWall(first.walls, first.ids[0], { x: 0, z: -1 }), openings: [] });
+  assert.deepEqual(t.plan.rooms.map((r) => r.id), ['living'], 'rooms named by hand are left as they are');
 });

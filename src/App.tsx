@@ -9,7 +9,6 @@ import { Start } from './components/Start';
 import { OpenGLCanvas } from './components/OpenGLCanvas';
 import { ImagePipelineLab } from './components/ImagePipelineLab';
 import { PlanEditor } from './components/PlanEditor';
-import { ProjectStatus } from './components/ProjectStatus';
 import { SAMPLE_FLOORPLANS } from './data/sampleFloorplans';
 import type { FloorPlanDataset } from './types/floorplan';
 import { autosavePlan, loadAutosavedPlan } from './data/planStorage';
@@ -91,7 +90,7 @@ export default function App() {
 
   return (
     <AppShell screen={screen} plan={plan} onSelectPlan={openPlan} theme={theme} onChangeTheme={setTheme}>
-      {screen === 'start' && <Start plan={plan} />}
+      {screen === 'start' && <Start plan={plan} preview={viewer(true)} />}
 
       {screen === 'viewer3d' && viewer(false)}
 
@@ -107,6 +106,7 @@ export default function App() {
           canUndo={state.past.length > 0}
           canRedo={state.future.length > 0}
           onRename={(name) => dispatch({ type: 'rename', name })}
+          onRenameRoom={(id, name) => dispatch({ type: 'renameRoom', id, name })}
           onNewPlan={() => openPlan(blankPlan())}
           preview={viewer(true)}
         />
@@ -119,7 +119,6 @@ export default function App() {
         {screen === 'about' && <AboutPage />}
       </Suspense>
 
-      {screen === 'status' && <ProjectStatus />}
     </AppShell>
   );
 }

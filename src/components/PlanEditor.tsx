@@ -1,9 +1,11 @@
 /**
- * Edit plan (Studio): draw and change walls, doors and windows on the 2D plan, with a live 3D
- * preview beside it and undo/redo. The drawing is an SVG in metres (x right, z down, as the 3D
- * top view), so walls are drawn at their real thickness and every click is snapped in metres:
- * to another wall's end, onto a wall (for a T junction), or to a 10 cm grid. Joined walls move
- * together (see utils/planEditing.ts).
+ * Edit plan (Studio): draw and change rooms, walls, doors and windows on the 2D plan, with a live
+ * 3D preview beside it and undo/redo. It follows what common plan editors do: drag a rectangle for
+ * a room, click corner to corner for walls, type an exact length (3.5) or room size (5x4) while
+ * drawing, and any space the walls close off becomes a room with a floor and an area
+ * (utils/rooms.ts). The drawing is an SVG in metres (x right, z down, as the 3D top view), so walls
+ * are drawn at their real thickness and every click is snapped in metres: to another wall's end,
+ * onto a wall (for a T junction), or to a 10 cm grid. Joined walls move together (utils/planEditing.ts).
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -17,6 +19,7 @@ import {
   MousePointer2,
   PenLine,
   Redo2,
+  Square,
   Trash2,
   Undo2,
   ZoomIn,
@@ -28,6 +31,7 @@ import { hrefOf } from '../router';
 import { distance2D } from '../utils/geometryEngine';
 import { openingSpan, openingsOnWall } from '../utils/openings';
 import {
+  addRoom,
   addWall,
   closestOnSegment,
   endsAt,
@@ -35,17 +39,22 @@ import {
   moveWall,
   moveWallEnd,
   nearestWall,
+  parseTyped,
   placeOpening,
+  pointAtLength,
   setWallLength,
+  setWallThickness,
   snapPoint,
+  typicalThickness,
   updateOpening,
   wallLength,
   type SnapKind,
   type WallEnd,
 } from '../utils/planEditing';
+import { labelPoint } from '../utils/rooms';
 import { Button, KeyValue, LinkButton, PageHeader, SectionTitle } from './ui';
 
-type Tool = 'select' | 'wall' | 'door' | 'window';
+type Tool = 'select' | 'room' | 'wall' | 'door' | 'window';
 type Selection = { kind: 'wall'; id: string } | { kind: 'opening'; id: string } | null;
 interface View {
   x: number;
@@ -60,10 +69,15 @@ const DRAG_PX = 3; // movement before a press becomes a drag
 
 const TOOLS: { id: Tool; label: string; key: string; icon: React.ReactNode }[] = [
   { id: 'select', label: 'Select', key: '1', icon: <MousePointer2 className="h-4 w-4" strokeWidth={1.5} /> },
-  { id: 'wall', label: 'Wall', key: '2', icon: <PenLine className="h-4 w-4" strokeWidth={1.5} /> },
-  { id: 'door', label: 'Door', key: '3', icon: <DoorOpen className="h-4 w-4" strokeWidth={1.5} /> },
-  { id: 'window', label: 'Window', key: '4', icon: <AppWindow className="h-4 w-4" strokeWidth={1.5} /> },
+  { id: 'room', label: 'Room', key: '2', icon: <Square className="h-4 w-4" strokeWidth={1.5} /> },
+  { id: 'wall', label: 'Wall', key: '3', icon: <PenLine className="h-4 w-4" strokeWidth={1.5} /> },
+  { id: 'door', label: 'Door', key: '4', icon: <DoorOpen className="h-4 w-4" strokeWidth={1.5} /> },
+  { id: 'window', label: 'Window', key: '5', icon: <AppWindow className="h-4 w-4" strokeWidth={1.5} /> },
 ];
+
+/** Wall thicknesses offered for new walls: thin partitions to outside walls. */
+const THICKNESSES = [0.1, 0.15, 0.2, 0.25, 0.3];
+const THICKNESS_NOTE: Record<string, string> = { '0.1': 'thin partition', '0.15': 'inside wall', '0.3': 'outside wall' };
 
 const fmtM = (v: number) => `${v.toFixed(2)} m`;
 
@@ -83,6 +97,7 @@ type Drag =
   | { type: 'end'; client: [number, number]; wallId: string; end: WallEnd; walls: WallSegment2D[]; key: string; moved: boolean }
   | { type: 'wall'; client: [number, number]; wallId: string; walls: WallSegment2D[]; from: Point2D; key: string; moved: boolean }
   | { type: 'opening'; client: [number, number]; id: string; offset: number; key: string; moved: boolean }
+  | { type: 'room'; client: [number, number]; moved: boolean; fresh: boolean }
   | { type: 'click'; client: [number, number]; moved: boolean };
 
 export const PlanEditor: React.FC<{
@@ -94,10 +109,11 @@ export const PlanEditor: React.FC<{
   canUndo: boolean;
   canRedo: boolean;
   onRename: (name: string) => void;
+  onRenameRoom: (id: string, name: string) => void;
   onNewPlan: () => void;
   /** The live 3D view shown beside the drawing. */
   preview: React.ReactNode;
-}> = ({ plan, onEdit, onSettle, onUndo, onRedo, canUndo, canRedo, onRename, onNewPlan, preview }) => {
+}> = ({ plan, onEdit, onSettle, onUndo, onRedo, canUndo, canRedo, onRename, onRenameRoom, onNewPlan, preview }) => {
   const { walls, openings } = plan;
   const [tool, setTool] = useState<Tool>('select');
   const [selection, setSelection] = useState<Selection>(null);
@@ -105,6 +121,9 @@ export const PlanEditor: React.FC<{
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [pointer, setPointer] = useState<{ point: Point2D; kind: SnapKind; raw: Point2D } | null>(null);
   const [chain, setChain] = useState<Point2D | null>(null); // the Wall tool's next start corner
+  const [roomStart, setRoomStart] = useState<Point2D | null>(null); // the Room tool's first corner
+  const [typed, setTyped] = useState(''); // a length or size typed while drawing
+  const [thickness, setThickness] = useState(() => typicalThickness(walls)); // for new walls
   const [size, setSize] = useState({ w: 800, h: 600 });
   const svgRef = useRef<SVGSVGElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
@@ -128,6 +147,9 @@ export const PlanEditor: React.FC<{
     setView(fitView(plan.walls));
     setSelection(null);
     setChain(null);
+    setRoomStart(null);
+    setTyped('');
+    setThickness(typicalThickness(plan.walls));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan.id]);
 
@@ -163,6 +185,55 @@ export const PlanEditor: React.FC<{
   };
 
   const edit = (next: Partial<PlanContent>, mergeKey?: string) => onEdit({ walls: next.walls ?? walls, openings: next.openings ?? openings }, mergeKey);
+
+  const chooseTool = (next: Tool) => {
+    setTool(next);
+    setChain(null);
+    setRoomStart(null);
+    setTyped('');
+  };
+
+  /** Adds a rectangular room between two opposite corners; false when it would be too small. */
+  const makeRoom = (a: Point2D, b: Point2D): boolean => {
+    const added = addRoom(walls, a, b, thickness);
+    if (!added) return false;
+    edit({ walls: added.walls });
+    setSelection(null);
+    setRoomStart(null);
+    setTyped('');
+    return true;
+  };
+
+  /** Adds the next wall of the chain, ending at `to`, and carries on from there. */
+  const addChainWall = (to: Point2D) => {
+    if (!chain || distance2D(chain, to) <= 0.05) return;
+    const added = addWall(walls, chain, to, thickness);
+    edit({ walls: added.walls });
+    setSelection({ kind: 'wall', id: added.id });
+    setChain(to);
+  };
+
+  const typedValues = typed ? parseTyped(typed) : null;
+  /** Where a typed length or size would put the next corner (null while nothing valid is typed). */
+  const typedTarget = (): Point2D | null => {
+    if (!typedValues) return null;
+    if (tool === 'wall' && chain) return pointAtLength(chain, pointer?.point ?? { x: chain.x + 1, z: chain.z }, typedValues[0]) ?? { x: chain.x + typedValues[0], z: chain.z };
+    if (tool === 'room' && roomStart) {
+      const [w, d = typedValues[0]] = typedValues;
+      const toward = pointer?.point;
+      return { x: roomStart.x + (toward && toward.x < roomStart.x ? -w : w), z: roomStart.z + (toward && toward.z < roomStart.z ? -d : d) };
+    }
+    return null;
+  };
+
+  const applyTyped = () => {
+    const target = typedTarget();
+    if (!target) return;
+    if (tool === 'wall') {
+      addChainWall(target);
+      setTyped('');
+    } else if (tool === 'room' && roomStart) makeRoom(roomStart, target);
+  };
 
   const deleteSelection = () => {
     if (selectedWall) edit({ walls: walls.filter((w) => w.id !== selectedWall.id) });
@@ -209,16 +280,34 @@ export const PlanEditor: React.FC<{
         return;
       }
       if (mod || e.altKey) return;
+      // While a wall or room is being drawn, number keys type its length or size.
+      const drawing = (tool === 'wall' && chain) || (tool === 'room' && roomStart);
+      if (drawing && /^[0-9.,xX*]$/.test(e.key)) {
+        e.preventDefault();
+        setTyped((t) => (t + e.key.toLowerCase()).slice(0, 16));
+        return;
+      }
+      if (drawing && e.key === 'Backspace' && typed) {
+        e.preventDefault();
+        setTyped((t) => t.slice(0, -1));
+        return;
+      }
+      if (drawing && e.key === 'Enter') {
+        e.preventDefault();
+        applyTyped();
+        return;
+      }
       const toolKey = TOOLS.find((tool) => tool.key === e.key);
       if (toolKey) {
-        setTool(toolKey.id);
-        setChain(null);
+        chooseTool(toolKey.id);
         return;
       }
       switch (e.key) {
         case 'Escape':
-          if (chain) setChain(null);
-          else if (tool !== 'select') setTool('select');
+          if (typed) setTyped('');
+          else if (chain) setChain(null);
+          else if (roomStart) setRoomStart(null);
+          else if (tool !== 'select') chooseTool('select');
           else setSelection(null);
           return;
         case 'Delete':
@@ -261,6 +350,8 @@ export const PlanEditor: React.FC<{
   const handlePointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button === 2) {
       setChain(null);
+      setRoomStart(null);
+      setTyped('');
       return;
     }
     const client: [number, number] = [e.clientX, e.clientY];
@@ -271,6 +362,13 @@ export const PlanEditor: React.FC<{
     }
     if (e.button === 1 || spaceHeld.current) {
       drag.current = { type: 'pan', client, view, moved: false };
+      return;
+    }
+    if (tool === 'room') {
+      // Press, drag and release draws a room; a click without dragging sets the first corner instead.
+      const fresh = !roomStart;
+      if (fresh) setRoomStart(snapFor(toWorld(e.clientX, e.clientY)).point);
+      drag.current = { type: 'room', client, moved: false, fresh };
       return;
     }
     if (tool !== 'select') {
@@ -305,6 +403,9 @@ export const PlanEditor: React.FC<{
     const d = drag.current;
     if (tool === 'wall') {
       const s = snapFor(raw, { anchor: chain, ortho: e.shiftKey });
+      setPointer({ point: s.point, kind: s.kind, raw });
+    } else if (tool === 'room') {
+      const s = snapFor(raw);
       setPointer({ point: s.point, kind: s.kind, raw });
     } else if (tool === 'door' || tool === 'window') {
       setPointer({ point: raw, kind: 'free', raw });
@@ -362,6 +463,13 @@ export const PlanEditor: React.FC<{
     drag.current = null;
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     if (!d) return;
+    if (d.type === 'room') {
+      const corner = snapFor(toWorld(e.clientX, e.clientY)).point;
+      // Released after a drag: the room is the rectangle dragged (a tiny drag counts as a click).
+      // A second click: the room ends there. A first click: wait for the opposite corner.
+      if (roomStart && (d.moved || !d.fresh)) makeRoom(roomStart, corner);
+      return;
+    }
     if (d.moved) {
       if (d.type !== 'pan') onSettle();
       return;
@@ -371,11 +479,9 @@ export const PlanEditor: React.FC<{
     if (tool === 'wall') {
       const s = snapFor(raw, { anchor: chain, ortho: e.shiftKey });
       if (!chain) setChain(s.point);
-      else if (distance2D(chain, s.point) > 0.05) {
-        const added = addWall(walls, chain, s.point);
-        edit({ walls: added.walls });
-        setSelection({ kind: 'wall', id: added.id });
-        setChain(s.point);
+      else {
+        addChainWall(s.point);
+        setTyped('');
       }
     } else if (tool === 'door' || tool === 'window') {
       const hit = nearestWall(walls, raw, Math.max(0.3, 14 * px));
@@ -397,13 +503,19 @@ export const PlanEditor: React.FC<{
   }, [tool, pointer, walls, openings, px]);
 
   const help =
-    tool === 'wall'
-      ? chain
-        ? 'Click to place the next corner. Double-click, right-click or Esc to stop. Hold Shift for a straight wall.'
-        : 'Click where the wall starts. Corners snap to other walls’ ends, and to a wall’s side for a T junction.'
-      : tool === 'door' || tool === 'window'
-        ? `Click on a wall to add a ${tool} there. Drag it along the wall afterwards with Select.`
-        : 'Click a wall, door or window to select it. Drag a wall’s round ends to reshape it, or the wall itself to move it. Drag empty space to pan; scroll to zoom.';
+    tool === 'room'
+      ? roomStart
+        ? 'Release or click at the opposite corner, or type a size such as 5x4 and press Enter. Esc cancels.'
+        : 'Drag a rectangle to make a room, or click two opposite corners. Draw the next room against a wall of this one to share it.'
+      : tool === 'wall'
+        ? chain
+          ? 'Click the next corner, or type a length and press Enter. Double-click, right-click or Esc to stop; hold Shift for a straight wall.'
+          : 'Click where the wall starts. Corners snap to other walls’ ends, and to a wall’s side for a T junction. Closing a space makes it a room.'
+        : tool === 'door' || tool === 'window'
+          ? `Click on a wall to add a ${tool} there. Drag it along the wall afterwards with Select.`
+          : 'Click a wall, door or window to select it. Drag a wall’s round ends to reshape it, or the wall itself to move it. Drag empty space to pan; scroll to zoom.';
+  const target = typedTarget();
+  const roomTo = tool === 'room' && roomStart ? target ?? pointer?.point ?? null : null;
 
   const cursor = tool === 'select' ? (drag.current?.type === 'pan' ? 'grabbing' : 'default') : 'crosshair';
   const label = (p: Point2D, text: string, key: string) => (
@@ -469,7 +581,7 @@ export const PlanEditor: React.FC<{
     <div className="flex min-h-full flex-col gap-4 lg:h-full">
       <PageHeader
         title="Edit plan"
-        description="Draw and change walls, doors and windows. The 3D view beside the drawing updates as you go; Cmd or Ctrl + Z undoes."
+        description="Draw rooms and walls, then add doors and windows. Spaces the walls close off become rooms with a floor. The 3D view beside the drawing updates as you go; Cmd or Ctrl + Z undoes."
         actions={
           <>
             <Button
@@ -499,16 +611,14 @@ export const PlanEditor: React.FC<{
                   role="radio"
                   aria-checked={tool === t.id}
                   title={`${t.label} (${t.key})`}
-                  onClick={() => {
-                    setTool(t.id);
-                    setChain(null);
-                  }}
+                  aria-label={t.label}
+                  onClick={() => chooseTool(t.id)}
                   className={`inline-flex h-7 items-center gap-1.5 rounded-[5px] px-2.5 text-[13px] transition-colors ${
                     tool === t.id ? 'bg-surface font-medium text-ink ring-1 ring-line' : 'text-muted hover:text-ink'
                   }`}
                 >
                   {t.icon}
-                  {t.label}
+                  <span className="hidden sm:inline">{t.label}</span>
                 </button>
               ))}
             </div>
@@ -523,10 +633,31 @@ export const PlanEditor: React.FC<{
               <Trash2 className="h-4 w-4" strokeWidth={1.5} />
             </Button>
             <span className="mx-1 h-5 w-px bg-line" aria-hidden="true" />
-            <Button variant="ghost" aria-pressed={snapToGrid} onClick={() => setSnapToGrid((v) => !v)} title="Snap corners to a 10 cm grid">
+            <Button variant="ghost" aria-pressed={snapToGrid} onClick={() => setSnapToGrid((v) => !v)} title="Snap corners to a 10 cm grid" aria-label="Snap to grid">
               <Grid3x3 className="h-4 w-4" strokeWidth={1.5} />
-              Grid
+              <span className="hidden sm:inline">Grid</span>
             </Button>
+            {(tool === 'room' || tool === 'wall') && (
+              <label className="flex items-center gap-1.5 text-[13px] text-muted">
+                <span className="hidden sm:inline">New walls</span>
+                <span className="sr-only sm:hidden">Thickness of new walls</span>
+                <select
+                  value={String(thickness)}
+                  onChange={(e) => setThickness(Number(e.target.value))}
+                  className="h-7 rounded-md border border-control bg-surface px-1.5 text-[13px] text-ink"
+                  title="Thickness of the walls you draw next"
+                >
+                  {[...new Set([...THICKNESSES, Math.round(thickness * 100) / 100])]
+                    .sort((a, b) => a - b)
+                    .map((t) => (
+                      <option key={t} value={String(t)}>
+                        {fmtM(t)}
+                        {THICKNESS_NOTE[String(t)] ? ` · ${THICKNESS_NOTE[String(t)]}` : ''}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
             <div className="ml-auto flex items-center gap-1">
               <Button variant="ghost" onClick={() => zoomAt(1.25)} title="Zoom out (−)" aria-label="Zoom out">
                 <ZoomOut className="h-4 w-4" strokeWidth={1.5} />
@@ -575,6 +706,24 @@ export const PlanEditor: React.FC<{
                 <line key={w.id} x1={w.start.x} y1={w.start.z} x2={w.end.x} y2={w.end.z} stroke="var(--text)" strokeWidth={w.thickness} strokeLinecap="square" className="pointer-events-none" />
               ))}
               {walls.map((w) => openingsOnWall(openings, w.id).map((o) => drawOpening(o, w)))}
+
+              {/* Room names and floor areas, where the room is big enough on screen to hold them. */}
+              {plan.rooms.map((r) => {
+                const xs = r.corners.map((c) => c.x);
+                const zs = r.corners.map((c) => c.z);
+                if ((Math.max(...xs) - Math.min(...xs)) / px < 70 || (Math.max(...zs) - Math.min(...zs)) / px < 44) return null;
+                const at = labelPoint(r.corners);
+                return (
+                  <g key={`label-${r.id}`} className="pointer-events-none select-none">
+                    <text x={at.x} y={at.z - 7 * px} fontSize={12 * px} textAnchor="middle" fill="var(--text)" className="font-medium">
+                      {r.name}
+                    </text>
+                    <text x={at.x} y={at.z + 9 * px} fontSize={11 * px} textAnchor="middle" fill="var(--muted)" className="num">
+                      {r.areaSqM.toFixed(1)} m²
+                    </text>
+                  </g>
+                );
+              })}
 
               {/* Hit areas, wider than thin walls so they are easy to catch. */}
               {tool === 'select' &&
@@ -674,40 +823,94 @@ export const PlanEditor: React.FC<{
 
               {ghost && drawOpening(ghost.opening, ghost.wall, true)}
 
-              {tool === 'wall' && pointer && (
+              {tool === 'room' && roomStart && roomTo && (() => {
+                const x0 = Math.min(roomStart.x, roomTo.x);
+                const z0 = Math.min(roomStart.z, roomTo.z);
+                const w = Math.abs(roomTo.x - roomStart.x);
+                const d = Math.abs(roomTo.z - roomStart.z);
+                return (
+                  <g className="pointer-events-none">
+                    <rect x={x0} y={z0} width={w} height={d} fill="var(--accent)" fillOpacity={0.08} stroke="var(--accent)" strokeWidth={thickness} opacity={0.6} />
+                    {w > 0.05 && label({ x: x0 + w / 2, z: z0 - thickness / 2 - 12 * px }, fmtM(w), 'room-w')}
+                    {d > 0.05 && label({ x: x0 - thickness / 2 - 28 * px, z: z0 + d / 2 }, fmtM(d), 'room-d')}
+                    <circle cx={roomStart.x} cy={roomStart.z} r={4 * px} fill="var(--accent)" />
+                  </g>
+                );
+              })()}
+              {tool === 'room' && !roomStart && pointer && (
                 <g className="pointer-events-none">
-                  {chain && (
-                    <>
-                      <line
-                        x1={chain.x}
-                        y1={chain.z}
-                        x2={pointer.point.x}
-                        y2={pointer.point.z}
-                        stroke="var(--accent)"
-                        strokeWidth={Math.max(2 * px, walls.length ? addWall(walls, chain, pointer.point).walls.at(-1)!.thickness : 0.2)}
-                        strokeLinecap="square"
-                        opacity={0.5}
-                      />
-                      {distance2D(chain, pointer.point) > 0.05 &&
-                        label({ x: (chain.x + pointer.point.x) / 2, z: (chain.z + pointer.point.z) / 2 - 16 * px }, fmtM(distance2D(chain, pointer.point)), 'draw-len')}
-                      <circle cx={chain.x} cy={chain.z} r={4 * px} fill="var(--accent)" />
-                    </>
-                  )}
                   <circle cx={pointer.point.x} cy={pointer.point.z} r={4 * px} fill="var(--accent)" />
                   {pointer.kind !== 'grid' && pointer.kind !== 'free' && (
                     <circle cx={pointer.point.x} cy={pointer.point.z} r={9 * px} fill="none" stroke="var(--accent)" strokeWidth={1.5 * px} />
                   )}
                 </g>
               )}
+
+              {tool === 'wall' && pointer && (() => {
+                const to = (chain && target) || pointer.point;
+                return (
+                <g className="pointer-events-none">
+                  {chain && (
+                    <>
+                      <line
+                        x1={chain.x}
+                        y1={chain.z}
+                        x2={to.x}
+                        y2={to.z}
+                        stroke="var(--accent)"
+                        strokeWidth={Math.max(2 * px, thickness)}
+                        strokeLinecap="square"
+                        opacity={0.5}
+                      />
+                      {distance2D(chain, to) > 0.05 && label({ x: (chain.x + to.x) / 2, z: (chain.z + to.z) / 2 - 16 * px }, fmtM(distance2D(chain, to)), 'draw-len')}
+                      <circle cx={chain.x} cy={chain.z} r={4 * px} fill="var(--accent)" />
+                    </>
+                  )}
+                  <circle cx={to.x} cy={to.z} r={4 * px} fill="var(--accent)" />
+                  {!target && pointer.kind !== 'grid' && pointer.kind !== 'free' && (
+                    <circle cx={pointer.point.x} cy={pointer.point.z} r={9 * px} fill="none" stroke="var(--accent)" strokeWidth={1.5 * px} />
+                  )}
+                </g>
+                );
+              })()}
             </svg>
 
-            {walls.length === 0 && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6 text-center text-[14px] text-muted">
-                <p className="max-w-sm">An empty plan. Pick the Wall tool (2) and click to place the first corner; each click adds the next wall.</p>
+            {walls.length === 0 && tool !== 'room' && tool !== 'wall' && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
+                <div className="pointer-events-auto max-w-sm rounded-lg border border-line bg-surface p-5 text-center">
+                  <p className="text-[15px] font-semibold">Start with a room</p>
+                  <p className="mt-1 text-[13px] text-muted">
+                    Drag a rectangle to get a room’s four walls, then draw the next room against it. While drawing, type a size such as 5x4 and press
+                    Enter for exact measurements.
+                  </p>
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    <Button variant="primary" onClick={() => chooseTool('room')}>
+                      <Square className="h-4 w-4" strokeWidth={1.5} />
+                      Draw a room
+                    </Button>
+                    <Button onClick={() => chooseTool('wall')}>
+                      <PenLine className="h-4 w-4" strokeWidth={1.5} />
+                      Draw walls
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {((tool === 'wall' && chain) || (tool === 'room' && roomStart)) && (
+              <div className="pointer-events-none absolute bottom-3 left-3 rounded-md border border-line bg-surface px-3 py-1.5 text-[13px]" aria-live="polite">
+                {typed ? (
+                  <>
+                    <span className="text-muted">{tool === 'room' ? 'Size' : 'Length'} </span>
+                    <span className={`num font-medium ${typedValues ? 'text-ink' : 'text-negative'}`}>{typed.replace(/x/g, ' × ')} m</span>
+                    <span className="text-muted"> · Enter to place · Esc to clear</span>
+                  </>
+                ) : (
+                  <span className="text-muted">{tool === 'room' ? 'Type a size such as 5x4, or drag' : 'Type a length such as 3.5, or click'}</span>
+                )}
               </div>
             )}
           </div>
-          <p className="border-t border-line px-3 py-2 text-xs text-muted" aria-live="polite">
+          <p className="border-t border-line px-3 py-2 text-[13px] text-muted" aria-live="polite">
             {help}
           </p>
         </section>
@@ -719,6 +922,7 @@ export const PlanEditor: React.FC<{
                 wall={selectedWall}
                 openings={openingsOnWall(openings, selectedWall.id)}
                 onLength={(length) => edit({ walls: setWallLength(walls, selectedWall.id, length) }, `length-${selectedWall.id}`)}
+                onThickness={(t) => edit({ walls: setWallThickness(walls, selectedWall.id, t) }, `thickness-${selectedWall.id}`)}
                 onAdd={(kind) => {
                   const placed = placeOpening(openings, selectedWall, kind, 0.5);
                   edit({ openings: placed.openings });
@@ -753,7 +957,30 @@ export const PlanEditor: React.FC<{
                   <KeyValue label="Doors">{doors}</KeyValue>
                   <KeyValue label="Windows">{windows}</KeyValue>
                 </div>
-                <p className="mt-2 text-xs text-muted">Select a wall, door or window to change it. Keys: 1 Select · 2 Wall · 3 Door · 4 Window · Delete · F fit.</p>
+                {plan.rooms.length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-[13px] text-muted">
+                      Rooms <span className="num">· {plan.rooms.reduce((sum, r) => sum + r.areaSqM, 0).toFixed(1)} m² in all</span>
+                    </p>
+                    <ul className="mt-1 flex flex-col gap-1">
+                      {plan.rooms.map((r) => (
+                        <li key={r.id} className="flex items-center gap-2">
+                          <input
+                            value={r.name}
+                            onChange={(e) => onRenameRoom(r.id, e.target.value)}
+                            aria-label={`Name of the room of ${r.areaSqM.toFixed(1)} m²`}
+                            className="h-8 min-w-0 flex-1 rounded-md border border-control bg-surface px-2 text-[13px] text-ink"
+                          />
+                          <span className="num w-16 shrink-0 text-right text-[13px] text-muted">{r.areaSqM.toFixed(1)} m²</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <p className="mt-3 text-[13px] leading-5 text-muted">
+                  Select a wall, door or window to change it. Keys: 1 Select · 2 Room · 3 Wall · 4 Door · 5 Window · Delete · F fit. While drawing, type a
+                  length (3.5) or a room size (5x4) and press Enter.
+                </p>
               </>
             )}
           </section>
@@ -820,15 +1047,16 @@ const WallPanel: React.FC<{
   wall: WallSegment2D;
   openings: Opening2D[];
   onLength: (length: number) => void;
+  onThickness: (thickness: number) => void;
   onAdd: (kind: OpeningKind) => void;
   onPick: (id: string) => void;
   onDelete: () => void;
   onSettle: () => void;
-}> = ({ wall, openings, onLength, onAdd, onPick, onDelete, onSettle }) => (
+}> = ({ wall, openings, onLength, onThickness, onAdd, onPick, onDelete, onSettle }) => (
   <>
     <SectionTitle aside={<span className="text-xs text-muted">{wall.name ?? wall.id}</span>}>Wall</SectionTitle>
     <MetreField label="Length" value={wallLength(wall)} min={0.1} max={100} onChange={onLength} onSettle={onSettle} />
-    <KeyValue label="Thickness">{fmtM(wall.thickness)}</KeyValue>
+    <MetreField label="Thickness" value={wall.thickness} min={0.05} max={1} step={0.01} onChange={onThickness} onSettle={onSettle} />
     <div className="mt-3">
       <p className="text-[13px] text-muted">Doors and windows</p>
       {openings.length === 0 ? (
