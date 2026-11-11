@@ -74,12 +74,13 @@ for (const line of log) {
 const finalVal = finalLine.match(/wall IoU ([\d.]+).*door\+window IoU ([\d.]+)\s+after (\d+) steps, (\d+)k crops, ([\d.]+) min/);
 if (finalVal) curve.push({ step: Number(finalVal[3]), wallIoU: Number(finalVal[1]), openingsIoU: Number(finalVal[2]) });
 
+// Summary figures keep 5 decimals, so a mean such as 0.751515 still shows as 75.2% after the page rounds it to a tenth.
 const summaryOf = (results: Results) => ({
-  meanIoU: round(results.summary.meanIoU),
-  medianIoU: round(results.summary.medianIoU),
-  precision: round(results.summary.meanPrecision),
-  recall: round(results.summary.meanRecall),
-  openingsIoU: results.summary.meanOpeningsIoU === undefined ? null : round(results.summary.meanOpeningsIoU),
+  meanIoU: round(results.summary.meanIoU, 5),
+  medianIoU: round(results.summary.medianIoU, 5),
+  precision: round(results.summary.meanPrecision, 5),
+  recall: round(results.summary.meanRecall, 5),
+  openingsIoU: results.summary.meanOpeningsIoU === undefined ? null : round(results.summary.meanOpeningsIoU, 5),
   falseShare: {
     inOpenings: round(results.summary.falseShare.inOpenings),
     besideWall: round(results.summary.falseShare.besideWall),
