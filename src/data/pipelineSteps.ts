@@ -97,14 +97,14 @@ export const PIPELINE_STEPS: PipelineStep[] = [
     does:
       'Segments become walls: a centerline and a thickness. This step is our own code, not an OpenCV call. Slanted segments are set aside, not silently dropped.',
     parts: [
-      'Deskew: measure the drawing’s rotation and work in a frame where walls are level.',
+      'Deskew: measure the drawing’s rotation and level it.',
       'Snap segments within ±5° to exactly horizontal or vertical.',
-      'Merge pieces of one edge that line up and overlap or nearly touch.',
-      'Pair two parallel faces a wall’s thickness apart, with ink between them, into one wall.',
-      'Join pieces of one wall across short gaps and wherever the centerline is ink all the way.',
-      'Grow each end along its centerline while there is ink, so walls reach into corners.',
-      'Close corners and T-junctions: an end near a crossing wall extends or trims to it.',
-      'Drop lines much thinner than the typical wall, and small groups not joined to the main walls.',
+      'Merge pieces of one edge that line up.',
+      'Pair two parallel faces with ink between them into one wall.',
+      'Join pieces of a wall across short gaps.',
+      'Grow wall ends along the ink into the corners.',
+      'Close corners and T-junctions.',
+      'Drop thin lines and stray pieces.',
     ],
     tex: String.raw`\begin{gathered} \hat{\varphi} = \operatorname{median}_{\ell}\ \varphi_i \\ c = \tfrac{1}{2}\,(o_1 + o_2), \quad t = \lvert o_1 - o_2 \rvert, \quad t_{\min} \le t \le t_{\max} \end{gathered}`,
     symbols:

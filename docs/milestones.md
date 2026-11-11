@@ -1,6 +1,6 @@
 # Milestones of the original C++ plan
 
-This is the team's original plan for the C++ and OpenGL desktop version, moved out of the web app on 4 Nov 2026. The product is now the web app. Its progress is on the app's **How it works → Project status** page (data in `src/data/projectStatus.ts`). The C++ code itself is in [`legacy-cpp/`](legacy-cpp/) and has never been compiled.
+This is the team's original plan for the C++ and OpenGL desktop version, moved out of the web app on 4 Nov 2026. The product is now the web app. The C++ code itself is in [`legacy-cpp/`](legacy-cpp/) and has never been compiled.
 
 ## M0 + M1 gate: baseline build and correctness
 

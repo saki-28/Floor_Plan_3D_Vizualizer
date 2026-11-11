@@ -129,7 +129,7 @@ export const PageHeader: React.FC<{ title: string; description?: React.ReactNode
   <header className="flex flex-wrap items-start justify-between gap-4">
     <div className="min-w-0 max-w-3xl">
       <h1 className="text-[22px] font-semibold leading-7">{title}</h1>
-      {description && <p className="mt-1 text-muted">{description}</p>}
+      {description && <p className="mt-1 text-[15px] leading-6 text-muted">{description}</p>}
     </div>
     {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
   </header>

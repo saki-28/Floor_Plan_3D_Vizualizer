@@ -1,8 +1,9 @@
 /**
- * The app frame (framed-sheet style). The top bar switches between the two areas of the app:
- * the Studio, where a plan is made and viewed (a sidebar lists its pages), and How it works,
- * which explains the system; its pages use the full width, with page tabs at the top of the
- * sheet. Every page is a link (see router.ts), so it can open in its own browser tab.
+ * The app frame (framed-sheet style). One sidebar lists every page in two groups: the Studio,
+ * where a plan is made and viewed, and How it works, which explains the system. Collapsed, it is
+ * a narrow rail that still shows each page's icon and a short label (hidden navigation is used
+ * about half as often on desktops, NN/g 2016); a click expands it to full names, and the choice is
+ * remembered. Every page is a link (see router.ts), so it can open in its own browser tab.
  * On a phone the frame folds into a top bar and a menu sheet.
  */
 
@@ -14,9 +15,10 @@ import {
   FolderOpen,
   House,
   Info,
-  ListChecks,
   Menu,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   PencilRuler,
   ScanLine,
   Shapes,
@@ -28,35 +30,57 @@ import type { FloorPlanDataset } from '../types/floorplan';
 import { SAMPLE_FLOORPLANS } from '../data/sampleFloorplans';
 import { planLabel } from '../utils/planLabel';
 import { parsePlan, planFileName, serializePlan } from '../data/planFile';
-import { AREA_HOME, AREA_LABELS, PAGES, hrefOf, type Area, type Screen } from '../router';
+import { AREA_LABELS, PAGES, hrefOf, type Area, type Screen } from '../router';
 import type { Theme } from '../theme';
 import { Button, Segmented } from './ui';
 
 interface NavItem {
-  id: Screen | 'draw';
+  id: Screen;
   label: string;
+  /** The label under the icon in the collapsed rail. */
+  short: string;
   icon: React.ReactNode;
-  planned?: boolean;
 }
 
-const ICON = 'h-4 w-4 shrink-0';
+const ICON = 'h-[18px] w-[18px] shrink-0';
 
 /** The pages of each area, in the order a person uses them. */
 const NAV: Record<Area, NavItem[]> = {
   studio: [
-    { id: 'start', label: 'Start', icon: <House className={ICON} strokeWidth={1.5} /> },
-    { id: 'imageLab', label: 'Image to plan', icon: <ScanLine className={ICON} strokeWidth={1.5} /> },
-    { id: 'edit', label: 'Edit plan', icon: <PencilRuler className={ICON} strokeWidth={1.5} /> },
-    { id: 'viewer3d', label: '3D viewer', icon: <Box className={ICON} strokeWidth={1.5} /> },
+    { id: 'start', label: 'Start', short: 'Start', icon: <House className={ICON} strokeWidth={1.5} /> },
+    { id: 'imageLab', label: 'Image to plan', short: 'Image', icon: <ScanLine className={ICON} strokeWidth={1.5} /> },
+    { id: 'edit', label: 'Edit plan', short: 'Edit', icon: <PencilRuler className={ICON} strokeWidth={1.5} /> },
+    { id: 'viewer3d', label: '3D viewer', short: '3D', icon: <Box className={ICON} strokeWidth={1.5} /> },
   ],
   how: [
-    { id: 'pipeline', label: 'Pipeline', icon: <Workflow className={ICON} strokeWidth={1.5} /> },
-    { id: 'results', label: 'Results', icon: <ChartColumn className={ICON} strokeWidth={1.5} /> },
-    { id: 'graphics', label: 'Graphics', icon: <Shapes className={ICON} strokeWidth={1.5} /> },
-    { id: 'status', label: 'Project status', icon: <ListChecks className={ICON} strokeWidth={1.5} /> },
-    { id: 'about', label: 'About', icon: <Info className={ICON} strokeWidth={1.5} /> },
+    { id: 'pipeline', label: 'Pipeline', short: 'Pipeline', icon: <Workflow className={ICON} strokeWidth={1.5} /> },
+    { id: 'results', label: 'Results', short: 'Results', icon: <ChartColumn className={ICON} strokeWidth={1.5} /> },
+    { id: 'graphics', label: 'Graphics', short: 'Graphics', icon: <Shapes className={ICON} strokeWidth={1.5} /> },
+    { id: 'about', label: 'About', short: 'About', icon: <Info className={ICON} strokeWidth={1.5} /> },
   ],
 };
+
+const SIDEBAR_KEY = 'floorplan3d.sidebarExpanded';
+
+/** Whether the sidebar is expanded, remembered in this browser (collapsed until someone expands it). */
+function useSidebarExpanded(): [boolean, (next: boolean) => void] {
+  const [expanded, setExpanded] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const set = (next: boolean) => {
+    setExpanded(next);
+    try {
+      localStorage.setItem(SIDEBAR_KEY, next ? '1' : '0');
+    } catch {
+      // Private windows may refuse storage; the choice then lasts until the page reloads.
+    }
+  };
+  return [expanded, set];
+}
 
 /** The product mark: a plan outline with one interior wall and a window in the accent. */
 export const ProductMark: React.FC<{ className?: string }> = ({ className = 'h-6 w-6' }) => (
@@ -185,26 +209,7 @@ const PlanFileActions: React.FC<{ plan: FloorPlanDataset; onOpen: (plan: FloorPl
   );
 };
 
-/** Studio or How it works. Each half is a link to the page last open in that area. */
-const AreaSwitch: React.FC<{ area: Area; lastPage: Record<Area, Screen>; onPick?: () => void }> = ({ area, lastPage, onPick }) => (
-  <nav aria-label="Area" className="inline-flex shrink-0 rounded-md border border-line bg-raised p-0.5">
-    {(Object.keys(AREA_LABELS) as Area[]).map((a) => (
-      <a
-        key={a}
-        href={hrefOf(lastPage[a])}
-        onClick={onPick}
-        aria-current={a === area ? 'page' : undefined}
-        className={`inline-flex h-7 items-center whitespace-nowrap rounded-[5px] px-3 text-[13px] transition-colors ${
-          a === area ? 'bg-surface font-medium text-ink ring-1 ring-line' : 'text-muted hover:text-ink'
-        }`}
-      >
-        {AREA_LABELS[a]}
-      </a>
-    ))}
-  </nav>
-);
-
-/** The Studio's pages as a vertical list (the sidebar, and the phone menu). */
+/** A group of pages as a vertical list (the expanded sidebar, and the phone menu). */
 const NavList: React.FC<{ items: NavItem[]; screen: Screen; label: string; touch?: boolean; onPick?: () => void }> = ({
   items,
   screen,
@@ -216,26 +221,19 @@ const NavList: React.FC<{ items: NavItem[]; screen: Screen; label: string; touch
     <ul className="flex flex-col gap-0.5">
       {items.map((item) => {
         const active = item.id === screen;
-        const row = `flex ${touch ? 'h-11' : 'h-8'} w-full items-center gap-2.5 rounded-md px-3 text-left text-[14px] transition-colors`;
         return (
           <li key={item.id}>
-            {item.planned || item.id === 'draw' ? (
-              <span className={`${row} cursor-default text-muted`} aria-disabled="true">
-                {item.icon}
-                <span className="flex-1 truncate">{item.label}</span>
-                <span className="text-xs">Planned</span>
-              </span>
-            ) : (
-              <a
-                href={hrefOf(item.id)}
-                onClick={onPick}
-                aria-current={active ? 'page' : undefined}
-                className={`${row} ${active ? 'bg-active font-medium text-ink' : 'text-muted hover:bg-active/60 hover:text-ink'}`}
-              >
-                {item.icon}
-                <span className="flex-1 truncate">{item.label}</span>
-              </a>
-            )}
+            <a
+              href={hrefOf(item.id)}
+              onClick={onPick}
+              aria-current={active ? 'page' : undefined}
+              className={`flex ${touch ? 'h-11' : 'h-9'} w-full items-center gap-3 rounded-md px-3 text-left text-[14px] transition-colors ${
+                active ? 'bg-active font-medium text-ink' : 'text-muted hover:bg-active/60 hover:text-ink'
+              }`}
+            >
+              {item.icon}
+              <span className="flex-1 truncate">{item.label}</span>
+            </a>
           </li>
         );
       })}
@@ -243,26 +241,70 @@ const NavList: React.FC<{ items: NavItem[]; screen: Screen; label: string; touch
   </nav>
 );
 
-/** How it works: its pages as underline tabs across the top of the sheet. */
-const PageTabs: React.FC<{ screen: Screen }> = ({ screen }) => (
-  <nav aria-label="How it works" className="mb-5 flex shrink-0 gap-1 overflow-x-auto border-b border-line [scrollbar-width:none]">
-    {NAV.how.map((item) => {
-      const active = item.id === screen;
-      return (
-        <a
-          key={item.id}
-          href={hrefOf(item.id as Screen)}
-          aria-current={active ? 'page' : undefined}
-          className={`-mb-px inline-flex h-10 shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 text-[14px] transition-colors ${
-            active ? 'border-ink font-medium text-ink' : 'border-transparent text-muted hover:text-ink'
-          }`}
-        >
-          {item.icon}
-          {item.label}
-        </a>
-      );
-    })}
+/** A group of pages as the collapsed rail: each an icon with its short label under it, the full name on hover. */
+const NavRail: React.FC<{ items: NavItem[]; screen: Screen; label: string }> = ({ items, screen, label }) => (
+  <nav aria-label={label}>
+    <ul className="flex flex-col gap-1">
+      {items.map((item) => {
+        const active = item.id === screen;
+        return (
+          <li key={item.id}>
+            <a
+              href={hrefOf(item.id)}
+              title={item.label}
+              aria-label={item.label}
+              aria-current={active ? 'page' : undefined}
+              className={`flex h-14 w-full flex-col items-center justify-center gap-1 rounded-lg text-[12px] leading-none transition-colors ${
+                active ? 'bg-active font-medium text-ink' : 'text-muted hover:bg-active/60 hover:text-ink'
+              }`}
+            >
+              {item.icon}
+              <span aria-hidden="true">{item.short}</span>
+            </a>
+          </li>
+        );
+      })}
+    </ul>
   </nav>
+);
+
+/** The sidebar: every page in two groups, as a rail or expanded, with the button that switches between them. */
+const Sidebar: React.FC<{ screen: Screen; expanded: boolean; onToggle: () => void }> = ({ screen, expanded, onToggle }) => (
+  <aside className={`hidden shrink-0 flex-col pb-3 transition-[width] duration-200 lg:flex ${expanded ? 'w-[232px] px-3' : 'w-[84px] px-2'}`} aria-label="Pages">
+    <div className={`flex h-12 items-center ${expanded ? 'px-3' : 'justify-center'}`}>
+      {expanded ? <Brand /> : (
+        <a href={hrefOf('start')} aria-label="FloorPlan3D, go to Start" className="rounded-md p-1">
+          <ProductMark className="h-6 w-6" />
+        </a>
+      )}
+    </div>
+    <div className="mt-2 flex-1 overflow-y-auto">
+      {(Object.keys(AREA_LABELS) as Area[]).map((a, i) => (
+        <div key={a} className={i ? (expanded ? 'mt-5' : 'mt-3 border-t border-line pt-3') : ''}>
+          {expanded ? (
+            <>
+              <p className="mb-1 px-3 text-[12px] font-medium text-muted">{AREA_LABELS[a]}</p>
+              <NavList items={NAV[a]} screen={screen} label={AREA_LABELS[a]} />
+            </>
+          ) : (
+            <NavRail items={NAV[a]} screen={screen} label={AREA_LABELS[a]} />
+          )}
+        </div>
+      ))}
+    </div>
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      title={expanded ? 'Collapse the sidebar' : 'Expand the sidebar'}
+      className={`mt-2 flex h-9 items-center gap-2 rounded-md text-[13px] text-muted transition-colors hover:bg-active/60 hover:text-ink ${
+        expanded ? 'px-3' : 'justify-center'
+      }`}
+    >
+      {expanded ? <PanelLeftClose className="h-[18px] w-[18px]" strokeWidth={1.5} /> : <PanelLeftOpen className="h-[18px] w-[18px]" strokeWidth={1.5} />}
+      {expanded ? 'Collapse' : <span className="sr-only">Expand the sidebar</span>}
+    </button>
+  </aside>
 );
 
 const Brand: React.FC<{ small?: boolean }> = ({ small }) => (
@@ -281,14 +323,12 @@ export const AppShell: React.FC<{
   children: React.ReactNode;
 }> = ({ screen, plan, onSelectPlan, theme, onChangeTheme, children }) => {
   const [menuOpen, setMenuOpen] = useState(false);
-  const area = PAGES[screen].area;
-  const [lastPage, setLastPage] = useState<Record<Area, Screen>>(AREA_HOME);
+  const [expanded, setExpanded] = useSidebarExpanded();
   const main = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    setLastPage((last) => (last[area] === screen ? last : { ...last, [area]: screen }));
     main.current?.scrollTo({ top: 0 });
-  }, [screen, area]);
+  }, [screen]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -298,28 +338,19 @@ export const AppShell: React.FC<{
   }, [menuOpen]);
 
   const closeMenu = () => setMenuOpen(false);
-  const studio = area === 'studio';
+  const area = PAGES[screen].area;
 
   return (
     <div className="flex h-full bg-ground text-ink">
-      {/* Studio sidebar: part of the tinted frame, no rule against the top bar or the sheet. */}
-      {studio && (
-        <aside className="hidden w-[228px] shrink-0 flex-col px-3 lg:flex">
-          <div className="flex h-12 items-center px-3">
-            <Brand />
-          </div>
-          <div className="mt-3 flex-1 overflow-y-auto">
-            <NavList items={NAV.studio} screen={screen} label="Studio" />
-          </div>
-        </aside>
-      )}
+      <Sidebar screen={screen} expanded={expanded} onToggle={() => setExpanded(!expanded)} />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Desktop top bar: the area, the plan in scope and the theme. */}
-        <header className={`hidden h-12 shrink-0 items-center justify-between gap-4 pr-4 lg:flex ${studio ? '' : 'pl-6'}`}>
+        {/* Desktop top bar: where you are, the plan in scope and the theme. */}
+        <header className="hidden h-12 shrink-0 items-center justify-between gap-4 pr-4 lg:flex">
           <div className="flex min-w-0 items-center gap-4">
-            {!studio && <Brand />}
-            <AreaSwitch area={area} lastPage={lastPage} />
+            <span className="whitespace-nowrap text-[13px] text-muted">
+              {AREA_LABELS[area]} <span aria-hidden="true">/</span> <span className="font-medium text-ink">{PAGES[screen].label}</span>
+            </span>
             <PlanSwitcher plan={plan} onSelect={onSelectPlan} />
             <PlanFileActions plan={plan} onOpen={onSelectPlan} />
           </div>
@@ -341,13 +372,7 @@ export const AppShell: React.FC<{
           <ThemeToggle theme={theme} onChange={onChangeTheme} compact />
         </header>
 
-        <main
-          ref={main}
-          className={`flex min-h-0 flex-1 flex-col overflow-y-auto border-line bg-surface p-4 sm:p-6 lg:mb-2 lg:mr-2 lg:rounded-2xl lg:border ${
-            studio ? '' : 'lg:ml-2'
-          }`}
-        >
-          {!studio && <PageTabs screen={screen} />}
+        <main ref={main} className="flex min-h-0 flex-1 flex-col overflow-y-auto border-line bg-surface p-4 sm:p-6 lg:mb-2 lg:mr-2 lg:rounded-2xl lg:border">
           <div className="min-h-0 flex-1">{children}</div>
         </main>
       </div>
