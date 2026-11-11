@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react';
 
-export type Screen = 'start' | 'imageLab' | 'edit' | 'viewer3d' | 'pipeline' | 'results' | 'graphics' | 'about' | 'status';
+export type Screen = 'start' | 'imageLab' | 'edit' | 'viewer3d' | 'pipeline' | 'results' | 'graphics' | 'about';
 export type Area = 'studio' | 'how';
 
 export interface PageInfo {
@@ -24,14 +24,11 @@ export const PAGES: Record<Screen, PageInfo> = {
   pipeline: { area: 'how', path: '/how/pipeline', label: 'Pipeline' },
   results: { area: 'how', path: '/how/results', label: 'Results' },
   graphics: { area: 'how', path: '/how/graphics', label: 'Graphics' },
-  status: { area: 'how', path: '/how/status', label: 'Project status' },
   about: { area: 'how', path: '/how/about', label: 'About' },
 };
 
 export const AREA_LABELS: Record<Area, string> = { studio: 'Studio', how: 'How it works' };
 
-/** The first page of each area, where the area switch lands. */
-export const AREA_HOME: Record<Area, Screen> = { studio: 'start', how: 'pipeline' };
 
 export const hrefOf = (screen: Screen) => `#${PAGES[screen].path}`;
 

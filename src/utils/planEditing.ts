@@ -145,20 +145,77 @@ function median(values: number[], fallback: number): number {
   return s[Math.floor(s.length / 2)];
 }
 
-/** A new wall from a to b, as thick and high as the plan's typical wall; returns its id too. */
-export function addWall(walls: WallSegment2D[], a: Point2D, b: Point2D): { walls: WallSegment2D[]; id: string } {
+/** The thickness new walls get unless one is chosen: the plan's typical wall, or 0.2 m for an empty plan. */
+export const typicalThickness = (walls: WallSegment2D[]) => median(walls.map((w) => w.thickness), 0.2);
+
+/** A new wall from a to b, as high as the plan's typical wall and as thick as asked (else typical); returns its id too. */
+export function addWall(walls: WallSegment2D[], a: Point2D, b: Point2D, thickness?: number): { walls: WallSegment2D[]; id: string } {
   const used = new Set(walls.map((w) => w.id));
   let n = walls.length + 1;
   while (used.has(`wall-${n}`)) n++;
   const id = `wall-${n}`;
   const wall: WallSegment2D = {
     id,
-    start: { ...a },
-    end: { ...b },
-    thickness: median(walls.map((w) => w.thickness), 0.2),
+    start: { x: clean(a.x), z: clean(a.z) },
+    end: { x: clean(b.x), z: clean(b.z) },
+    thickness: thickness ?? typicalThickness(walls),
     height: median(walls.map((w) => w.height), 2.8),
   };
   return { walls: [...walls, wall], id };
+}
+
+/** The smallest room side the Room tool makes (metres). */
+export const MIN_ROOM_SIDE = 0.5;
+
+/**
+ * A rectangular room with corners a and b (opposite corners, any order): four walls joined at
+ * their corners, drawn clockwise on screen. Returns null when a side would be under MIN_ROOM_SIDE.
+ */
+export function addRoom(walls: WallSegment2D[], a: Point2D, b: Point2D, thickness?: number): { walls: WallSegment2D[]; ids: string[] } | null {
+  const x0 = Math.min(a.x, b.x);
+  const x1 = Math.max(a.x, b.x);
+  const z0 = Math.min(a.z, b.z);
+  const z1 = Math.max(a.z, b.z);
+  if (x1 - x0 < MIN_ROOM_SIDE || z1 - z0 < MIN_ROOM_SIDE) return null;
+  const t = thickness ?? typicalThickness(walls);
+  const corners: Point2D[] = [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }];
+  const ids: string[] = [];
+  let next = walls;
+  corners.forEach((c, i) => {
+    const added = addWall(next, c, corners[(i + 1) % 4], t);
+    next = added.walls;
+    ids.push(added.id);
+  });
+  return { walls: next, ids };
+}
+
+/** Sets one wall's thickness. */
+export function setWallThickness(walls: WallSegment2D[], wallId: string, thickness: number): WallSegment2D[] {
+  return walls.map((w) => (w.id === wallId ? { ...w, thickness } : w));
+}
+
+/**
+ * Where a wall typed as a length should end: from `from`, `length` metres towards `toward`, with
+ * the direction snapped to the nearest 45° when it is within 8° of it (the pointer rarely sits
+ * exactly level). Null when the pointer is on the start point, so there is no direction.
+ */
+export function pointAtLength(from: Point2D, toward: Point2D, length: number): Point2D | null {
+  const dx = toward.x - from.x;
+  const dz = toward.z - from.z;
+  if (Math.hypot(dx, dz) < 1e-6) return null;
+  let angle = Math.atan2(dz, dx);
+  const step = Math.PI / 4;
+  const snapped = Math.round(angle / step) * step;
+  if (Math.abs(angle - snapped) < (8 * Math.PI) / 180) angle = snapped;
+  return { x: clean(from.x + Math.cos(angle) * length), z: clean(from.z + Math.sin(angle) * length) };
+}
+
+/** Lengths typed while drawing: "3.5" or "5x4" (also 5*4, 5×4, and a comma as the decimal point). */
+export function parseTyped(text: string): number[] | null {
+  const parts = text.replace(/,/g, '.').split(/[x*×]/i).map((p) => p.trim());
+  if (!parts.length || parts.length > 2 || parts.some((p) => p === '')) return null;
+  const values = parts.map(Number);
+  return values.every((v) => Number.isFinite(v) && v > 0 && v <= 200) ? values : null;
 }
 
 /** The opening's position (0..1 along the wall) moved to `t`, kept so the whole opening fits on the wall. */

@@ -1,8 +1,9 @@
 /**
  * The Results page's charts, drawn as plain SVG at the size they are shown, so text stays at its
  * real size. Rules are amber and the trained model blue (--series-rules, --series-model; both
- * checked for colour-blind separation in light and dark). Every chart has a hover read-out, and
- * every value is also in a label or a table, so nothing depends on hovering or on colour alone.
+ * checked for colour-blind separation in light and dark). Every chart has a hover read-out; bars
+ * carry their values as labels and series are named in a legend, so no figure depends on colour.
+ * Single plans are only read out on hover: the page shows summaries, not all 400 plans.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -293,7 +294,8 @@ export const TrainingCurve: React.FC<{ points: CurvePoint[]; kept: number; label
   const sx = (step: number) => left + (step / maxStep) * plotW;
   const sy = (v: number) => top + (1 - (v - yMin) / (yMax - yMin)) * plotH;
   const yTicks = [0.5, 0.6, 0.7, 0.8];
-  const xTicks = [0, 5000, 10000, 15000, 20000].filter((t) => t <= maxStep);
+  const tickStep = maxStep > 25000 ? 10000 : 5000;
+  const xTicks = Array.from({ length: Math.floor(maxStep / tickStep) + 1 }, (_, i) => i * tickStep);
   const path = points.map((p, i) => `${i ? 'L' : 'M'}${sx(p.step)},${sy(p.wallIoU)}`).join('');
   const keptPoint = points.find((p) => p.step === kept);
 

@@ -8,7 +8,7 @@
  */
 
 import React, { useMemo, useRef, useState } from 'react';
-import { Box, ImageUp, Loader2, RotateCcw } from 'lucide-react';
+import { Box, ChevronDown, ImageUp, Loader2, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import type { FloorPlanDataset } from '../types/floorplan';
 import type { StageId } from '../vision/pipeline';
 import type { TunableKey } from '../vision/pipelineParams';
@@ -50,6 +50,7 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
   usePipelineRunner(cv);
   const { testPlans, selectedPlanId, source, sourceError, overrides, run, runError, running } = usePipelineSession();
   const [stageId, setStageId] = useState<StageId>(7);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -58,6 +59,7 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
     if (file) void loadUploadedImage(file);
   };
 
+  const changed = Object.keys(overrides).length;
   const stats = run?.stats;
   // Stage 1 may shrink the image; ground truth and scale are in input pixels.
   const resize = run ? run.workingSize.width / run.inputSize.width : 1;
@@ -96,7 +98,7 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
       : `${run.walls.length} wall pieces from ${run.stats.total} raw segments. This image has no known walls to score against.`;
 
   return (
-    <div className="flex min-h-full flex-col gap-5">
+    <div className="flex flex-col gap-4 lg:h-full">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 max-w-3xl">
           <h1 className="text-[22px] font-semibold leading-7">Image to plan</h1>
@@ -141,8 +143,8 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
         </p>
       ))}
 
-      <div className="grid flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_280px]">
-        <section className="flex min-w-0 flex-col gap-3" aria-label="Pipeline stages">
+      <div className="grid gap-6 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <section className="flex min-w-0 flex-col gap-3 lg:min-h-0" aria-label="Pipeline stages">
           {run && stage ? (
             <>
               <div role="tablist" aria-label="Stages" className="grid grid-cols-4 gap-2 md:grid-cols-7">
@@ -176,11 +178,11 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
                 </h2>
                 <span className="num text-[13px] text-muted">{formatMs(stage.timingMs)}</span>
               </div>
-              <div className="flex aspect-[4/3] max-h-[52vh] items-center justify-center overflow-hidden rounded-lg border border-line bg-raised">
+              <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-lg border border-line bg-raised lg:aspect-auto lg:min-h-[240px] lg:flex-1">
                 <StageCanvas image={stage.image} className="h-full w-full object-contain" label={`${stage.title} output`} />
               </div>
               <div className="flex flex-col gap-1.5 text-[13px]">
-                <p className="text-ink">{STAGE_NOTES[stage.id]}</p>
+                <p className="text-[14px] text-ink">{STAGE_NOTES[stage.id]}</p>
                 <StageLegend id={stage.id} />
                 <p className="num text-muted">Settings: {formatEntries(stage.params)}</p>
                 <p className="num text-muted">Result: {formatEntries(stage.counts)}</p>
@@ -188,14 +190,14 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
 
             </>
           ) : (
-            <div className="flex aspect-[4/3] max-h-[62vh] flex-col items-center justify-center gap-2 rounded-lg border border-line bg-raised text-[13px] text-muted">
+            <div className="flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-lg border border-line bg-raised text-[13px] text-muted lg:aspect-auto lg:flex-1">
               {!cvError && !runError && <Loader2 className="h-5 w-5 animate-spin" />}
               <span>{placeholder}</span>
             </div>
           )}
         </section>
 
-        <aside className="flex flex-col gap-6" aria-label="Summary and settings">
+        <aside className="flex flex-col gap-5 lg:min-h-0 lg:overflow-y-auto" aria-label="Summary and settings">
           <section>
             <SectionTitle>Summary</SectionTitle>
             {run && source && stats ? (
@@ -221,7 +223,7 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
                 </KeyValue>
                 <KeyValue label="Same-edge duplicates">{stats.sameEdgeDuplicates}</KeyValue>
 
-                {source.note && <p className="mt-1 text-xs text-muted">{source.note}</p>}
+                {source.note && <p className="mt-1 text-[13px] text-muted">{source.note}</p>}
               </>
             ) : (
               <p className="text-[13px] text-muted">Waiting for the first run.</p>
@@ -246,40 +248,54 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
             </p>
           )}
 
-          <section>
-            <SectionTitle
-              aside={
-                <Button variant="ghost" onClick={() => setOverrides({})} disabled={Object.keys(overrides).length === 0} className="h-7 px-2">
+          {/* The six detection settings are for tuning, not for every visit: kept behind a disclosure. */}
+          <details
+            className="rounded-md border border-line"
+            open={settingsOpen}
+            onToggle={(e) => setSettingsOpen((e.currentTarget as HTMLDetailsElement).open)}
+          >
+            <summary className="flex h-10 cursor-pointer list-none items-center justify-between gap-2 px-3 text-[14px] font-medium [&::-webkit-details-marker]:hidden">
+              <span className="flex items-center gap-2">
+                <SlidersHorizontal className="h-4 w-4 text-muted" strokeWidth={1.5} />
+                Adjust detection
+              </span>
+              <span className="flex items-center gap-1.5 text-[13px] font-normal text-muted">
+                {changed ? `${changed} changed` : `${TUNABLES.length} settings`}
+                <ChevronDown className={`h-4 w-4 transition-transform ${settingsOpen ? 'rotate-180' : ''}`} strokeWidth={1.5} />
+              </span>
+            </summary>
+            <div className="border-t border-line px-3 pb-3 pt-2">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <p className="text-[13px] text-muted">For drawings the defaults miss.</p>
+                <Button variant="ghost" onClick={() => setOverrides({})} disabled={!changed} className="h-7 px-2">
                   <RotateCcw className="h-3.5 w-3.5" strokeWidth={1.5} /> Defaults
                 </Button>
-              }
-            >
-              Settings
-            </SectionTitle>
-            {TUNABLES.map((t) => {
-              const value = overrides[t.key] ?? run?.options[t.key];
-              return (
-                <Slider
-                  key={t.key}
-                  label={t.label}
-                  value={value ?? t.min}
-                  display={value !== undefined ? `${value}${t.unit}` : '–'}
-                  min={t.min}
-                  max={t.max}
-                  step={t.step}
-                  disabled={!run}
-                  hint={t.hint}
-                  onChange={(v) => setOverrides({ ...overrides, [t.key]: v })}
-                />
-              );
-            })}
-          </section>
+              </div>
+              {TUNABLES.map((t) => {
+                const value = overrides[t.key] ?? run?.options[t.key];
+                return (
+                  <Slider
+                    key={t.key}
+                    label={t.label}
+                    value={value ?? t.min}
+                    display={value !== undefined ? `${value}${t.unit}` : '–'}
+                    min={t.min}
+                    max={t.max}
+                    step={t.step}
+                    disabled={!run}
+                    hint={t.hint}
+                    onChange={(v) => setOverrides({ ...overrides, [t.key]: v })}
+                  />
+                );
+              })}
+            </div>
+          </details>
 
           <section className="rounded-md bg-raised p-4 text-[13px]">
-            <h2 className="font-semibold">Next</h2>
+            <h2 className="font-semibold">Not 100% accurate</h2>
             <p className="mt-1 text-muted">
-              A scale step (click two points, type the real distance) so uploads open in 3D at their true size, and telling
-              doors from windows in the gaps between wall pieces.
+              Detected walls can be missing, misplaced or extra, and an upload’s size is a guess. Check them against the real plan and fix them in Edit plan
+              before relying on them.
             </p>
           </section>
         </aside>

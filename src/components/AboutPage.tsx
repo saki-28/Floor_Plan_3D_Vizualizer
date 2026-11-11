@@ -94,9 +94,27 @@ const METHOD_PAPERS: Reference[] = [
     venue: '3DV',
     use: 'The soft Dice loss, so thin walls and small doors count.',
   },
-  { authors: 'Otsu, N.', year: 1979, title: 'A Threshold Selection Method from Gray-Level Histograms', venue: 'IEEE Transactions on Systems, Man, and Cybernetics 9(1)', use: 'Pipeline step 3.' },
-  { authors: 'Zuiderveld, K.', year: 1994, title: 'Contrast Limited Adaptive Histogram Equalization', venue: 'Graphics Gems IV, Academic Press', use: 'Pipeline step 2.' },
-  { authors: 'Canny, J.', year: 1986, title: 'A Computational Approach to Edge Detection', venue: 'IEEE Transactions on Pattern Analysis and Machine Intelligence 8(6)', use: 'Pipeline step 5.' },
+  {
+    authors: 'Otsu, N.',
+    year: 1979,
+    title: 'A Threshold Selection Method from Gray-Level Histograms',
+    venue: 'IEEE Transactions on Systems, Man, and Cybernetics 9(1)',
+    use: 'Pipeline step 3.',
+  },
+  {
+    authors: 'Zuiderveld, K.',
+    year: 1994,
+    title: 'Contrast Limited Adaptive Histogram Equalization',
+    venue: 'Graphics Gems IV, Academic Press',
+    use: 'Pipeline step 2.',
+  },
+  {
+    authors: 'Canny, J.',
+    year: 1986,
+    title: 'A Computational Approach to Edge Detection',
+    venue: 'IEEE Transactions on Pattern Analysis and Machine Intelligence 8(6)',
+    use: 'Pipeline step 5.',
+  },
   {
     authors: 'Matas, J., Galambos, C. & Kittler, J.',
     year: 2000,
@@ -104,15 +122,27 @@ const METHOD_PAPERS: Reference[] = [
     venue: 'Computer Vision and Image Understanding 78(1)',
     use: 'Pipeline step 6.',
   },
-  { authors: 'Bresenham, J. E.', year: 1965, title: 'Algorithm for Computer Control of a Digital Plotter', venue: 'IBM Systems Journal 4(1)', use: 'Line drawing on the Graphics page.' },
+  {
+    authors: 'Bresenham, J. E.',
+    year: 1965,
+    title: 'Algorithm for Computer Control of a Digital Plotter',
+    venue: 'IBM Systems Journal 4(1)',
+    use: 'Line drawing on the Graphics page.',
+  },
 ];
 
-const Section: React.FC<{ id: string; title: string; children: React.ReactNode }> = ({ id, title, children }) => (
-  <section aria-labelledby={id} className="grid grid-cols-1 gap-4 border-t border-line pt-8 lg:grid-cols-[220px_minmax(0,1fr)]">
-    <h2 id={id} className="text-[18px] font-semibold leading-6">
+/** One card of the About page: a heading over comfortable reading text. */
+const Section: React.FC<{
+  id: string;
+  title: string;
+  className?: string;
+  children: React.ReactNode;
+}> = ({ id, title, className = '', children }) => (
+  <section aria-labelledby={id} className={`flex min-w-0 flex-col gap-3 rounded-xl border border-line p-5 ${className}`}>
+    <h2 id={id} className="text-[16px] font-semibold leading-6">
       {title}
     </h2>
-    <div className="flex max-w-3xl flex-col gap-3 text-[14px] leading-6">{children}</div>
+    <div className="flex flex-col gap-3 text-[15px] leading-6">{children}</div>
   </section>
 );
 
@@ -125,14 +155,19 @@ const Link: React.FC<{ href: string; children: React.ReactNode }> = ({ href, chi
 const References: React.FC<{ items: Reference[] }> = ({ items }) => (
   <ol className="flex flex-col gap-3">
     {items.map((ref) => (
-      <li key={ref.title} className="text-[13px] leading-5">
+      <li key={ref.title} className="text-[14px] leading-5">
         <span className="text-ink">
           {ref.authors} ({ref.year}). <cite className="not-italic font-medium">{ref.title}</cite>. {ref.venue}.
         </span>
         {ref.doi && (
           <>
             {' '}
-            <a href={`https://doi.org/${ref.doi}`} className="text-muted underline underline-offset-2 hover:text-ink" target="_blank" rel="noreferrer">
+            <a
+              href={`https://doi.org/${ref.doi}`}
+              className="text-muted underline underline-offset-2 hover:text-ink"
+              target="_blank"
+              rel="noreferrer"
+            >
               doi:{ref.doi}
             </a>
           </>
@@ -144,81 +179,105 @@ const References: React.FC<{ items: Reference[] }> = ({ items }) => (
 );
 
 export const AboutPage: React.FC = () => (
-  <div className="flex flex-col gap-8">
-    <PageHeader title="About" description="What FloorPlan3D is, what is new in it and what is not, what it cannot do yet, and the work it builds on." />
+  <div className="flex flex-col gap-5">
+    <PageHeader
+      title="About"
+      description="What FloorPlan3D is, what is new in it and what is not, what it cannot do yet, and the work it builds on."
+    />
 
-    <Section id="about-what" title="What it is">
-      <p>
-        FloorPlan3D turns a floor plan into a 3D model you can walk around, in the browser. Start from a sample, an image of a plan or a blank page; fix the
-        walls, doors and windows in <Link href={hrefOf('edit')}>Edit plan</Link>, with every change undoable; then view, measure and export the model in the{' '}
-        <Link href={hrefOf('viewer3d')}>3D viewer</Link>.
-      </p>
-      <p>
-        Everything runs on your computer. The image steps use OpenCV.js, the 3D is drawn with WebGL, and your images and plans are never sent anywhere. A plan
-        is saved in this browser as you work, and can be saved to and opened from a file.
-      </p>
-    </Section>
+    <div className="grid items-start gap-5 lg:grid-cols-2 xl:grid-cols-3">
+      <div className="flex min-w-0 flex-col gap-5">
+        <Section id="about-what" title="What it is">
+          <p>
+            FloorPlan3D turns a floor plan into a 3D model you can walk around, in the browser. Start from a sample, an image of a plan or a blank
+            page; fix the walls, doors and windows in <Link href={hrefOf('edit')}>Edit plan</Link>, with every change undoable; then view, measure and
+            export the model in the <Link href={hrefOf('viewer3d')}>3D viewer</Link>.
+          </p>
+          <p>
+            Everything runs on your computer. The image steps use OpenCV.js, the 3D is drawn with WebGL, and your images and plans are never sent
+            anywhere. A plan is saved in this browser as you work, and can be saved to and opened from a file.
+          </p>
+        </Section>
+        <Section id="about-risk" title="Use at your own risk">
+          <p>
+            FloorPlan3D is a student project, offered as it is and without any warranty. Finding walls in an image is not 100% accurate: on{' '}
+            {results.plans} real test plans the trained model’s walls overlap the true walls by {pct(results.model.meanIoU)} (IoU), and those of the
+            hand-written rules that Image to plan uses today by {pct(results.rules.meanIoU)}. Walls can be missed, misplaced or found where there are
+            none, and the size of an uploaded plan is a guess.
+          </p>
+          <p>
+            We have tried our best to make it good, and every result can be checked and corrected in <Link href={hrefOf('edit')}>Edit plan</Link>.
+            Compare a model with the real plan before relying on its walls or measurements.
+          </p>
+        </Section>
+      </div>
+      <div className="flex min-w-0 flex-col gap-5">
+        <Section id="about-new" title="What is new, and what is not">
+          <p>
+            Turning a plan image into a 3D model is not new: research systems such as Cambeiro Barreiro et al. (2023) and Cheng et al. (2022) do it,
+            and so do several commercial tools. What this project adds is smaller and, we think, useful for learning and for trust:
+          </p>
+          <ul className="flex list-disc flex-col gap-2 pl-5 marker:text-muted">
+            <li>
+              <strong className="font-semibold">You can see every step.</strong> The <Link href={hrefOf('pipeline')}>Pipeline</Link> page runs the
+              steps on your own image and shows each one’s picture, formula, settings and numbers. Results breaks down where the wrong wall pixels
+              come from.
+            </li>
+            <li>
+              <strong className="font-semibold">A fair comparison of rules and learning.</strong> Hand-written rules and a trained network are scored
+              on the same {results.plans} test plans with the same scorer: {pct(results.rules.meanIoU)} against {pct(results.model.meanIoU)} wall IoU
+              (<Link href={hrefOf('results')}>Results</Link>). It is one run, not a benchmark claim.
+            </li>
+            <li>
+              <strong className="font-semibold">A person stays in the loop.</strong> Detection is never the last word: walls, doors and windows can be
+              fixed in Edit plan, and the 3D follows at once. Running the trained model in the browser, so detection and fixing happen in one place,
+              is the next step.
+            </li>
+          </ul>
+        </Section>
+        <Section id="about-code" title="Code">
+          <p>
+            The code is on{' '}
+            <a href={REPOSITORY} className="font-medium text-ink underline underline-offset-2 hover:text-accent" target="_blank" rel="noreferrer">
+              GitHub
+            </a>
+            . The original plan for a C++ desktop version and its unfinished code are kept in the repository’s docs folder, not in the app.
+          </p>
+        </Section>
+      </div>
+      <div className="flex min-w-0 flex-col gap-5 lg:col-span-2 xl:col-span-1">
+        <Section id="about-limits" title="What it cannot do yet">
+          <ul className="flex list-disc flex-col gap-2 pl-5 marker:text-muted">
+            <li>Walls must be horizontal or vertical. Slanted walls are set aside and curved walls are not handled.</li>
+            <li>Image to plan uses the rules, which do best on clean drawings with solid walls. The trained model is not in the app yet.</li>
+            <li>Doors and windows are not found in images yet; add them in Edit plan.</li>
+            <li>An uploaded image’s scale is guessed from its wall thickness, until there is a step to set it from a known length.</li>
+            <li>Rooms and floors cannot be drawn yet, and a plan has one storey. Several storeys are planned.</li>
+          </ul>
+        </Section>
+        <Section id="about-licences" title="Data and licences">
+          <p>
+            CubiCasa5k is licensed CC BY-NC-SA 4.0: it may be used for non-commercial work only, and so may a model trained on it. We use it to train
+            and to test. None of its images, plans or our model’s weights are part of this app or its code; the Results page shows scores only.
+          </p>
+          <p>
+            The test plans in Image to plan are drawn by our own code (scripts/generate-test-plans.ts), with their true walls known, so they can be
+            shared freely.
+          </p>
+          <p className="text-muted">
+            Built with React, TypeScript and Vite; OpenCV.js (Apache 2.0) for images; KaTeX (MIT) for formulas; PyTorch on Kaggle for training.
+          </p>
+        </Section>
+      </div>
+    </div>
 
-    <Section id="about-new" title="What is new, and what is not">
-      <p>
-        Turning a plan image into a 3D model is not new: research systems such as Cambeiro Barreiro et al. (2023) and Cheng et al. (2022) do it, and so do
-        several commercial tools. What this project adds is smaller and, we think, useful for learning and for trust:
-      </p>
-      <ul className="flex list-disc flex-col gap-2 pl-5 marker:text-muted">
-        <li>
-          <strong className="font-semibold">You can see every step.</strong> The <Link href={hrefOf('pipeline')}>Pipeline</Link> page runs the steps on your
-          own image and shows each one’s picture, formula, settings and numbers. Results breaks down where the wrong wall pixels come from.
-        </li>
-        <li>
-          <strong className="font-semibold">A fair comparison of rules and learning.</strong> Hand-written rules and a trained network are scored on the same{' '}
-          {results.plans} test plans with the same scorer: {pct(results.rules.meanIoU)} against {pct(results.model.meanIoU)} wall IoU (
-          <Link href={hrefOf('results')}>Results</Link>). It is one run, not a benchmark claim.
-        </li>
-        <li>
-          <strong className="font-semibold">A person stays in the loop.</strong> Detection is never the last word: walls, doors and windows can be fixed in Edit
-          plan, and the 3D follows at once. Running the trained model in the browser, so detection and fixing happen in one place, is the next step.
-        </li>
-      </ul>
-    </Section>
-
-    <Section id="about-limits" title="What it cannot do yet">
-      <ul className="flex list-disc flex-col gap-2 pl-5 marker:text-muted">
-        <li>Walls must be horizontal or vertical. Slanted walls are set aside and curved walls are not handled.</li>
-        <li>Image to plan uses the rules, which do best on clean drawings with solid walls. The trained model is not in the app yet.</li>
-        <li>Doors and windows are not found in images yet; add them in Edit plan.</li>
-        <li>An uploaded image’s scale is guessed from its wall thickness, until there is a step to set it from a known length.</li>
-        <li>Rooms and floors cannot be drawn yet, and a plan has one storey. Several storeys are planned.</li>
-      </ul>
-      <p className="text-muted">
-        Progress on each of these is on <Link href={hrefOf('status')}>Project status</Link>.
-      </p>
-    </Section>
-
-    <Section id="about-papers" title="Floor plans to 3D">
-      <References items={PLAN_PAPERS} />
-    </Section>
-
-    <Section id="about-methods" title="Data and methods">
-      <References items={METHOD_PAPERS} />
-    </Section>
-
-    <Section id="about-licences" title="Data and licences">
-      <p>
-        CubiCasa5k is licensed CC BY-NC-SA 4.0: it may be used for non-commercial work only, and so may a model trained on it. We use it to train and to test.
-        None of its images, plans or our model’s weights are part of this app or its code; the Results page shows scores only.
-      </p>
-      <p>The test plans in Image to plan are drawn by our own code (scripts/generate-test-plans.ts), with their true walls known, so they can be shared freely.</p>
-      <p className="text-muted">Built with React, TypeScript and Vite; OpenCV.js (Apache 2.0) for images; KaTeX (MIT) for formulas; PyTorch on Kaggle for training.</p>
-    </Section>
-
-    <Section id="about-code" title="Code">
-      <p>
-        The code is on{' '}
-        <a href={REPOSITORY} className="font-medium text-ink underline underline-offset-2 hover:text-accent" target="_blank" rel="noreferrer">
-          GitHub
-        </a>
-        . The original plan for a C++ desktop version and its unfinished code are kept in the repository’s docs folder, not in the app.
-      </p>
-    </Section>
+    <div className="grid items-start gap-5 lg:grid-cols-2">
+      <Section id="about-papers" title="Floor plans to 3D">
+        <References items={PLAN_PAPERS} />
+      </Section>
+      <Section id="about-methods" title="Data and methods">
+        <References items={METHOD_PAPERS} />
+      </Section>
+    </div>
   </div>
 );
