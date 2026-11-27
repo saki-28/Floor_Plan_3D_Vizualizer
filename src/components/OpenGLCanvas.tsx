@@ -1,12 +1,16 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   FloorPlanDataset,
+  Opening2D,
   WallSegment2D,
   Point2D,
 } from '../types/floorplan';
 import {
+  extrudeBox,
+  extrudePrism,
   extrudeWallSegment,
   extrudeWallWithOpenings,
+  cornerFills,
   generateFloorMesh,
   combineMeshes,
   Mesh3D,
@@ -15,19 +19,18 @@ import {
   mat4Perspective,
   mat4Orthographic,
   mat4LookAt,
-  screenToFloorRay,
   worldToScreen,
-  snapToFloorGeometry,
   distance2D,
   downloadOBJ,
   Mat4,
 } from '../utils/geometryEngine';
-import { Check, Copy, Download, House, Maximize, Pause, Play, RotateCcw, RotateCw, Ruler, Trash2, ZoomIn, ZoomOut } from 'lucide-react';
+import { Check, ChevronDown, Copy, Download, House, Maximize, Minimize, Pause, PencilRuler, Play, RotateCcw, RotateCw, Ruler, ScanSearch, Trash2, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
 import type { Theme } from '../theme';
 import { planLabel } from '../utils/planLabel';
-import { openingsOnWall, wallCuts } from '../utils/openings';
+import { openingSpan, wallCuts } from '../utils/openings';
+import { isVisibleAlong, measureCorners, pickScene, screenRay, snapToCorner, straighten, type Vec3 } from '../utils/picking';
 import { PlanThumbnail } from './PlanThumbnail';
-import { Button, KeyValue, SectionTitle, Segmented, Slider, Switch } from './ui';
+import { Button, ControlSize, KeyValue, Segmented, Slider, Switch } from './ui';
 
 interface OpenGLCanvasProps {
   floorplan: FloorPlanDataset;
@@ -38,9 +41,12 @@ interface OpenGLCanvasProps {
   onChangeWallThickness: (thickness: number) => void;
   showFurniture: boolean;
   onToggleFurniture: () => void;
-  selectedWallId: string | null;
-  onSelectWall: (wallId: string | null) => void;
   theme: Theme;
+  /** Removes a wall, door or window picked in the 3D view (one step to undo). Without it nothing can be deleted here. */
+  onEdit?: (content: { walls: WallSegment2D[]; openings: Opening2D[] }) => void;
+  onUndo?: () => void;
+  /** Opens Edit plan, where the picked wall, door or window can be changed. */
+  onOpenEditor?: () => void;
   /** Just the 3D view with its view buttons: no header, side panel or keyboard shortcuts (for a live preview beside the plan editor). */
   compact?: boolean;
 }
@@ -57,6 +63,13 @@ const VIEW_BUTTONS: { preset: ViewPreset; label: string }[] = [
 
 type CameraPose = { yaw: number; pitch: number; radius: number; target: [number, number, number] };
 
+/** A measured point: its place on the plan, and the height of what was pointed at (the floor, or a wall's top). */
+type MeasurePoint = Point2D & { y: number };
+/** The wall, door or window picked in the 3D view. */
+type Picked = { kind: 'wall'; id: string } | { kind: 'opening'; id: string };
+/** How near the pointer has to be to a corner, on the screen, for a measurement to snap to it. */
+const SNAP_RADIUS_PX = 14;
+
 /** Camera limits and steps for the rotate and zoom controls. */
 const MIN_RADIUS = 1.5;
 const ZOOM_STEP = 1.25; // per click or key press
@@ -64,6 +77,14 @@ const ROTATE_STEP_DEG = 45; // per rotate button
 const KEY_ROTATE_DEG = 15; // per arrow key
 const KEY_TILT_DEG = 5;
 const AUTO_ROTATE_DEG_PER_S = 20;
+
+/** The walls as meshes: each with its doors and windows cut out, and the outside of every corner filled in. */
+function wallMeshesOf(walls: WallSegment2D[], openings: Opening2D[]): Mesh3D[] {
+  return [
+    ...walls.map((w) => extrudeWallWithOpenings(w, wallCuts(openings, w, w.height))),
+    ...cornerFills(walls).map((outline) => extrudePrism(outline, 0, walls[0]?.height ?? 2.8)),
+  ];
+}
 
 /** `to` as the equivalent angle nearest `from`, so a move turns the short way round. */
 const nearestAngle = (from: number, to: number) => from + ((((to - from) % 360) + 540) % 360) - 180;
@@ -77,9 +98,10 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   onChangeWallThickness,
   showFurniture,
   onToggleFurniture,
-  selectedWallId,
-  onSelectWall,
   theme,
+  onEdit,
+  onUndo,
+  onOpenEditor,
   compact = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -106,19 +128,32 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   // Measurement Tool State
   const [isMeasuring, setIsMeasuring] = useState(false);
   const [snapToCorners, setSnapToCorners] = useState(true);
-  const [measurePointA, setMeasurePointA] = useState<Point2D | null>(null);
-  const [measurePointB, setMeasurePointB] = useState<Point2D | null>(null);
-  const [hoverFloorPoint, setHoverFloorPoint] = useState<Point2D | null>(null);
+  const [measurePointA, setMeasurePointA] = useState<MeasurePoint | null>(null);
+  const [measurePointB, setMeasurePointB] = useState<MeasurePoint | null>(null);
+  const [hoverFloorPoint, setHoverFloorPoint] = useState<MeasurePoint | null>(null);
   const [isHoverSnapped, setIsHoverSnapped] = useState(false);
   const [copiedDistance, setCopiedDistance] = useState(false);
 
   // Store active camera matrices for live 3D-to-2D screen projection of measurement overlay
   const cameraMatsRef = useRef<{ viewMat: Mat4; projMat: Mat4 } | null>(null);
+  type ScreenPoint = [number, number] | null;
   const [screenOverlayCoords, setScreenOverlayCoords] = useState<{
-    screenA: [number, number] | null;
-    screenB: [number, number] | null;
-    screenHover: [number, number] | null;
-  }>({ screenA: null, screenB: null, screenHover: null });
+    screenA: ScreenPoint;
+    screenB: ScreenPoint;
+    screenHover: ScreenPoint;
+    /** Where A and B were pointed at, when that is above the measured line (the top of a wall). */
+    liftA: ScreenPoint;
+    liftB: ScreenPoint;
+  }>({ screenA: null, screenB: null, screenHover: null, liftA: null, liftB: null });
+
+  // The wall, door or window picked by a click, shown in the accent colour.
+  const [picked, setPicked] = useState<Picked | null>(null);
+  const [removed, setRemoved] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fillsWindow, setFillsWindow] = useState(false); // where the browser has no full screen (iPhone)
+
+  // The walls as they are built: every wall at the height and thickness chosen in the side panel.
+  const solidWalls = useMemo(() => walls.map((w) => ({ ...w, height: wallHeight, thickness: wallThickness })), [walls, wallHeight, wallThickness]);
 
   // WebGL context and program refs
   const glRef = useRef<WebGLRenderingContext | null>(null);
@@ -126,6 +161,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   const wallBufferRef = useRef<{ vao: WebGLBuffer | null; count: number }>({ vao: null, count: 0 });
   const floorBufferRef = useRef<{ vao: WebGLBuffer | null; count: number }>({ vao: null, count: 0 });
   const furnitureBufferRef = useRef<{ vao: WebGLBuffer | null; count: number }>({ vao: null, count: 0 });
+  const pickedBufferRef = useRef<{ vao: WebGLBuffer | null; count: number }>({ vao: null, count: 0 });
 
   const [stats, setStats] = useState({ vertices: 0, triangles: 0, fps: 60 });
   const frameCountRef = useRef(0);
@@ -165,8 +201,16 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     uniform vec3 uViewPos;
     uniform int uRenderMode; // 0=Shaded, 1=Normals, 2=Depth
     uniform int uIsWireframe;
+    uniform float uAlpha; // below 1 only for the picked wall, door or window
 
     void main() {
+      if (uAlpha < 1.0) {
+        // The picked item: its colour, a little darker on faces turned from the light.
+        float lit = 0.75 + 0.25 * max(dot(normalize(vNormal), normalize(-uLightDir)), 0.0);
+        gl_FragColor = vec4(uColor * lit, uAlpha);
+        return;
+      }
+
       if (uRenderMode == 1) {
         vec3 nColor = normalize(vNormal) * 0.5 + 0.5;
         gl_FragColor = vec4(nColor, 1.0);
@@ -259,11 +303,9 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     const gl = glRef.current;
     if (!gl) return;
 
-    // Extrude walls with current height and thickness, with their doors and windows cut out
-    const wallMeshes: Mesh3D[] = walls.map((w) =>
-      extrudeWallWithOpenings({ ...w, height: wallHeight, thickness: wallThickness }, wallCuts(floorplan.openings, w, wallHeight))
-    );
-    const combinedWalls = combineMeshes(wallMeshes);
+    // Extrude walls with current height and thickness, with their doors and windows cut out,
+    // and fill the outside of every corner so walls meet in a clean edge.
+    const combinedWalls = combineMeshes(wallMeshesOf(solidWalls, floorplan.openings));
 
     // Floor meshes
     const floorMeshes = floorplan.rooms.map((r) => generateFloorMesh(r.corners));
@@ -320,7 +362,47 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
       triangles: (combinedWalls.indices.length + combinedFloors.indices.length) / 3,
       fps: 60,
     });
-  }, [walls, floorplan, wallHeight, wallThickness, showFurniture]);
+  }, [solidWalls, floorplan, showFurniture]);
+
+  // The picked wall, door or window as its own slightly larger box, drawn over the model.
+  const pickedWall = picked?.kind === 'wall' ? solidWalls.find((w) => w.id === picked.id) ?? null : null;
+  const pickedOpening = picked?.kind === 'opening' ? floorplan.openings.find((o) => o.id === picked.id) ?? null : null;
+  const pickedOpeningWall = pickedOpening ? solidWalls.find((w) => w.id === pickedOpening.wallId) ?? null : null;
+  useEffect(() => {
+    // A pick that no longer exists (deleted, or another plan was opened) is dropped.
+    if (picked && !pickedWall && !(pickedOpening && pickedOpeningWall)) setPicked(null);
+  }, [picked, pickedWall, pickedOpening, pickedOpeningWall]);
+  useEffect(() => {
+    const gl = glRef.current;
+    if (!gl) return;
+    if (pickedBufferRef.current.vao) gl.deleteBuffer(pickedBufferRef.current.vao);
+    pickedBufferRef.current = { vao: null, count: 0 };
+    const GROW = 0.02;
+    let mesh: Mesh3D | null = null;
+    const boxAlong = (wall: WallSegment2D, from: number, to: number, y0: number, y1: number) => {
+      const length = distance2D(wall.start, wall.end);
+      if (length < 1e-6) return null;
+      const at = (s: number) => ({ x: wall.start.x + ((wall.end.x - wall.start.x) * s) / length, z: wall.start.z + ((wall.end.z - wall.start.z) * s) / length });
+      return extrudeBox(at(from), at(to), wall.thickness + 2 * GROW, y0, y1);
+    };
+    if (pickedWall) {
+      mesh = boxAlong(pickedWall, -GROW, distance2D(pickedWall.start, pickedWall.end) + GROW, 0, wallHeight + GROW);
+    } else if (pickedOpening && pickedOpeningWall) {
+      const { from, to } = openingSpan(pickedOpening, distance2D(pickedOpeningWall.start, pickedOpeningWall.end));
+      const sill = Math.min(pickedOpening.sill, wallHeight);
+      mesh = boxAlong(pickedOpeningWall, from, to, sill, Math.min(sill + pickedOpening.height, wallHeight));
+    }
+    if (!mesh || mesh.indices.length === 0) return;
+    const flattened: number[] = [];
+    for (const idx of mesh.indices) {
+      const v = mesh.vertices[idx];
+      flattened.push(...v.position, ...v.normal, ...v.texCoord);
+    }
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(flattened), gl.STATIC_DRAW);
+    pickedBufferRef.current = { vao: buffer, count: mesh.indices.length };
+  }, [pickedWall, pickedOpening, pickedOpeningWall, wallHeight]);
 
   // Render loop
   const renderScene = useCallback(() => {
@@ -375,11 +457,19 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     if (container) {
       const cw = container.clientWidth;
       const ch = container.clientHeight;
-      const sA = measurePointA ? worldToScreen([measurePointA.x, 0.05, measurePointA.z], viewMat, projMat, cw, ch) : null;
+      const project = (p: MeasurePoint, y = p.y) => worldToScreen([p.x, y, p.z], viewMat, projMat, cw, ch);
       const targetB = measurePointB || (isMeasuring && measurePointA ? hoverFloorPoint : null);
-      const sB = targetB ? worldToScreen([targetB.x, 0.05, targetB.z], viewMat, projMat, cw, ch) : null;
-      const sHover = hoverFloorPoint ? worldToScreen([hoverFloorPoint.x, 0.05, hoverFloorPoint.z], viewMat, projMat, cw, ch) : null;
-      setScreenOverlayCoords({ screenA: sA, screenB: sB, screenHover: sHover });
+      // The measured line is level: it runs at the lower of its two ends, and an end that was
+      // pointed at higher up (the top of a wall) is joined to it by a drop line.
+      const level = measurePointA ? (targetB ? Math.min(measurePointA.y, targetB.y) : measurePointA.y) : 0;
+      const lifted = (p: MeasurePoint | null) => (p && p.y > level + 0.01 ? project(p) : null);
+      setScreenOverlayCoords({
+        screenA: measurePointA ? project(measurePointA, level) : null,
+        screenB: targetB ? project(targetB, level) : null,
+        screenHover: hoverFloorPoint ? project(hoverFloorPoint) : null,
+        liftA: lifted(measurePointA),
+        liftB: lifted(targetB),
+      });
     }
 
     const modelMat = mat4Identity();
@@ -393,6 +483,8 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     const uViewPosLoc = gl.getUniformLocation(program, 'uViewPos');
     const uRenderModeLoc = gl.getUniformLocation(program, 'uRenderMode');
     const uIsWireframeLoc = gl.getUniformLocation(program, 'uIsWireframe');
+    const uAlphaLoc = gl.getUniformLocation(program, 'uAlpha');
+    gl.uniform1f(uAlphaLoc, 1.0);
 
     gl.uniformMatrix4fv(uModelLoc, false, new Float32Array(modelMat));
     gl.uniformMatrix4fv(uViewLoc, false, new Float32Array(viewMat));
@@ -410,7 +502,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     const aNormLoc = gl.getAttribLocation(program, 'aNormal');
     const aTexLoc = gl.getAttribLocation(program, 'aTexCoord');
 
-    const drawBuffer = (buffer: { vao: WebGLBuffer | null; count: number }, color: [number, number, number]) => {
+    const drawBuffer = (buffer: { vao: WebGLBuffer | null; count: number }, color: [number, number, number], solid = false) => {
       if (!buffer.vao || buffer.count === 0) return;
 
       gl.bindBuffer(gl.ARRAY_BUFFER, buffer.vao);
@@ -426,7 +518,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
       gl.vertexAttribPointer(aTexLoc, 2, gl.FLOAT, false, stride, 6 * 4);
       gl.enableVertexAttribArray(aTexLoc);
 
-      if (isWireframe) {
+      if (isWireframe && !solid) {
         // Simulate wireframe via LINE_LOOP / LINES on modern WebGL
         gl.drawArrays(gl.LINE_STRIP, 0, buffer.count);
       } else {
@@ -458,6 +550,19 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     // 3. Draw Furniture if enabled
     if (showFurniture) {
       drawBuffer(furnitureBufferRef.current, furnColor);
+    }
+
+    // 4. The picked wall, door or window: see-through amber over the model (a colour nothing else in the scene uses).
+    if (pickedBufferRef.current.count > 0) {
+      const accent: [number, number, number] = [0.98, 0.62, 0.12];
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      gl.uniform1f(uAlphaLoc, 0.7);
+      drawBuffer(pickedBufferRef.current, accent, true);
+      gl.uniform1f(uAlphaLoc, 1.0);
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
     }
 
     // Measure FPS
@@ -648,25 +753,8 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     applyViewPreset('perspective', 0);
   }, [floorplan.id]);
 
-  // Snapping candidates from all walls and room corners
-  const snappingCandidates = useMemo<Point2D[]>(() => {
-    const pts: Point2D[] = [];
-    for (const w of walls) {
-      pts.push(w.start);
-      pts.push(w.end);
-      // Door centres snap too.
-      for (const o of openingsOnWall(floorplan.openings, w.id)) {
-        if (o.kind !== 'door') continue;
-        pts.push({ x: w.start.x + (w.end.x - w.start.x) * o.position, z: w.start.z + (w.end.z - w.start.z) * o.position });
-      }
-    }
-    for (const r of floorplan.rooms) {
-      for (const c of r.corners) {
-        pts.push(c);
-      }
-    }
-    return pts;
-  }, [walls, floorplan.rooms, floorplan.openings]);
+  // The corners a measurement snaps to: the walls' real corners (inside and outside) and the sides of doors and windows.
+  const corners = useMemo(() => measureCorners(solidWalls, floorplan.openings), [solidWalls, floorplan.openings]);
 
   // Active measurement values
   const activeMeasureTarget = measurePointB || (measurePointA ? hoverFloorPoint : null);
@@ -678,7 +766,62 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   const deltaZ =
     measurePointA && activeMeasureTarget ? Math.abs(activeMeasureTarget.z - measurePointA.z) : 0;
 
-  // Keyboard: M measures, Esc clears, arrows turn and tilt, + and − zoom, F fits, 0 resets.
+  // The picked wall, door or window in words, and removing it (one step to undo).
+  const pickedTitle = pickedOpening ? (pickedOpening.kind === 'door' ? 'Door' : 'Window') : pickedWall ? pickedWall.name || 'Wall' : '';
+  const pickedFacts = pickedOpening
+    ? `${pickedOpening.width.toFixed(2)} m wide · ${pickedOpening.height.toFixed(2)} m high${pickedOpening.sill > 0 ? ` · ${pickedOpening.sill.toFixed(2)} m above the floor` : ''}`
+    : pickedWall
+      ? (() => {
+          const on = floorplan.openings.filter((o) => o.wallId === pickedWall.id);
+          const doorsOn = on.filter((o) => o.kind === 'door').length;
+          const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+          return `${distance2D(pickedWall.start, pickedWall.end).toFixed(2)} m long · ${count(doorsOn, 'door')}, ${count(on.length - doorsOn, 'window')}`;
+        })()
+      : '';
+  const deletePicked = () => {
+    if (!picked || !onEdit) return;
+    if (picked.kind === 'wall') onEdit({ walls: walls.filter((w) => w.id !== picked.id), openings: floorplan.openings });
+    else onEdit({ walls, openings: floorplan.openings.filter((o) => o.id !== picked.id) });
+    setRemoved(pickedTitle);
+    setPicked(null);
+  };
+  // The "deleted" note with its Undo button goes away on its own.
+  useEffect(() => {
+    if (!removed) return;
+    const timer = window.setTimeout(() => setRemoved(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [removed]);
+
+  // Full screen: the 3D view with its controls fills the window at once, and the browser is asked
+  // to give it the whole screen. Where the browser cannot or will not (an iPhone, a page embedded
+  // in another app), the view simply stays filling the window, so the button always does something.
+  const toggleFullscreen = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (document.fullscreenElement || fillsWindow) {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+      setFillsWindow(false);
+      return;
+    }
+    setFillsWindow(true);
+    try {
+      void el.requestFullscreen?.().catch(() => {});
+    } catch {
+      // No full screen here: the view fills the window instead.
+    }
+  };
+  useEffect(() => {
+    const onChange = () => {
+      const on = document.fullscreenElement !== null && document.fullscreenElement === containerRef.current;
+      setIsFullscreen(on);
+      if (on) setFillsWindow(false); // the screen has taken over; leaving it goes back to the page
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+  const expanded = isFullscreen || fillsWindow;
+
+  // Keyboard: M measures, Esc clears, Delete removes the pick, arrows turn and tilt, + and − zoom, F fits, 0 resets.
   const handleKeyRef = useRef<(e: KeyboardEvent) => void>(() => {});
   handleKeyRef.current = (e: KeyboardEvent) => {
     if (compact) return; // the page around a compact preview owns the keyboard
@@ -694,6 +837,15 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
         if (measurePointB) setMeasurePointB(null);
         else if (measurePointA) setMeasurePointA(null);
         else if (isMeasuring) setIsMeasuring(false);
+        else if (picked) setPicked(null);
+        else if (fillsWindow) setFillsWindow(false);
+        return;
+      case 'Delete':
+      case 'Backspace':
+        if (picked && onEdit) {
+          e.preventDefault();
+          deletePicked();
+        }
         return;
       case 'ArrowLeft':
         rotateBy(-KEY_ROTATE_DEG);
@@ -775,32 +927,61 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
     );
   };
 
-  /** The floor point under a screen position, snapped to a corner when snapping is on. */
-  const floorPointAt = (clientX: number, clientY: number, snap = snapToCorners) => {
-    const container = containerRef.current;
-    if (!container || !cameraMatsRef.current) return null;
-    const rect = container.getBoundingClientRect();
-    const raw = screenToFloorRay(
-      clientX - rect.left,
-      clientY - rect.top,
-      rect.width,
-      rect.height,
-      cameraMatsRef.current.viewMat,
-      cameraMatsRef.current.projMat
-    );
-    if (!raw) return null;
-    return snap ? snapToFloorGeometry(raw, snappingCandidates, 0.45) : { point: raw, snapped: false };
+  /** The ray under a screen position, with that position inside the 3D view. */
+  const rayAt = (clientX: number, clientY: number) => {
+    const canvas = canvasRef.current;
+    const mats = cameraMatsRef.current;
+    if (!canvas || !mats) return null;
+    const rect = canvas.getBoundingClientRect();
+    const [x, y] = [clientX - rect.left, clientY - rect.top];
+    const ray = screenRay(x, y, rect.width, rect.height, mats.viewMat, mats.projMat);
+    return ray && { ray, x, y, width: rect.width, height: rect.height, ...mats };
   };
 
-  /** Double-click or double-tap: move the view's centre to that floor point and zoom in 2×. */
+  /**
+   * The point a measurement takes under the pointer: the nearest corner that can be seen (the top
+   * or the foot of a wall corner, or the side of a door or window) when one is within reach on the
+   * screen; otherwise the spot pointed at, on a wall or on the floor.
+   */
+  const measurePointAt = (clientX: number, clientY: number, snap = snapToCorners): { point: MeasurePoint; snapped: boolean } | null => {
+    const at = rayAt(clientX, clientY);
+    if (!at) return null;
+    if (snap) {
+      const project = (p: Vec3) => worldToScreen(p, at.viewMat, at.projMat, at.width, at.height);
+      const visible = (p: Vec3) => {
+        const screen = project(p);
+        const ray = screen && screenRay(screen[0], screen[1], at.width, at.height, at.viewMat, at.projMat);
+        return !ray || isVisibleAlong(ray, p, solidWalls, floorplan.openings);
+      };
+      const corner = snapToCorner([at.x, at.y], corners, [0, wallHeight], project, isTouchScreen ? 24 : SNAP_RADIUS_PX, visible);
+      if (corner) return { point: { ...corner.point, y: corner.y }, snapped: true };
+    }
+    const hit = pickScene(at.ray, solidWalls, floorplan.openings);
+    return hit && { point: { x: hit.point[0], z: hit.point[2], y: Math.max(0, hit.point[1]) }, snapped: false };
+  };
+
+  /** With Shift held, the second point stays level with the first along the plan's X or Z. */
+  const straightened = (point: MeasurePoint, shift: boolean): MeasurePoint =>
+    shift && measurePointA && !measurePointB ? { ...straighten(measurePointA, point), y: point.y } : point;
+
+  /** A click picks the wall, door or window under it; a click on the floor or the background clears the pick. */
+  const pickAt = (clientX: number, clientY: number) => {
+    const at = rayAt(clientX, clientY);
+    const hit = at && pickScene(at.ray, solidWalls, floorplan.openings);
+    setRemoved(null);
+    setPicked(hit && hit.kind !== 'floor' ? { kind: hit.kind, id: hit.id } : null);
+  };
+
+  /** Double-click or double-tap: move the view's centre to that point of the plan and zoom in 2×. */
   const zoomToPoint = (clientX: number, clientY: number) => {
-    const hit = floorPointAt(clientX, clientY, false);
+    const at = rayAt(clientX, clientY);
+    const hit = at && pickScene(at.ray, solidWalls, floorplan.openings);
     if (!hit) return;
     setActiveView(null);
-    animateCamera({ target: [hit.point.x, 0, hit.point.z], radius: clampR(basePose().radius / 2) });
+    animateCamera({ target: [hit.point[0], 0, hit.point[2]], radius: clampR(basePose().radius / 2) });
   };
 
-  const placeMeasurePoint = (point: Point2D) => {
+  const placeMeasurePoint = (point: MeasurePoint) => {
     setHoverFloorPoint(point);
     if (!measurePointA || measurePointB) {
       // First point, or a third click that starts a new measurement.
@@ -838,9 +1019,9 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (isMeasuring && e.pointerType === 'mouse') {
-      const hit = floorPointAt(e.clientX, e.clientY);
+      const hit = measurePointAt(e.clientX, e.clientY);
       if (hit) {
-        setHoverFloorPoint(hit.point);
+        setHoverFloorPoint(straightened(hit.point, e.shiftKey));
         setIsHoverSnapped(hit.snapped);
       }
     }
@@ -895,10 +1076,10 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
 
     const moveDist = Math.hypot(e.clientX - mouseDownPosRef.current.x, e.clientY - mouseDownPosRef.current.y);
     if (!cancelled && isMeasuring && moveDist < 6 && e.button === 0) {
-      const hit = floorPointAt(e.clientX, e.clientY);
+      const hit = measurePointAt(e.clientX, e.clientY);
       if (hit) {
         setIsHoverSnapped(hit.snapped);
-        placeMeasurePoint(hit.point);
+        placeMeasurePoint(straightened(hit.point, e.shiftKey));
       }
     }
     if (!cancelled && !isMeasuring && moveDist < 6 && e.button === 0) {
@@ -909,6 +1090,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
         zoomToPoint(e.clientX, e.clientY);
       } else {
         lastTapRef.current = { time: now, x: e.clientX, y: e.clientY };
+        if (!compact) pickAt(e.clientX, e.clientY);
       }
     }
     isDraggingRef.current = false;
@@ -929,7 +1111,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   }, []);
 
   // Screen coordinates for overlay
-  const { screenA, screenB, screenHover } = screenOverlayCoords;
+  const { screenA, screenB, screenHover, liftA, liftB } = screenOverlayCoords;
   const targetScreen = screenB || (isMeasuring && screenA ? screenHover : null);
 
   const planWidth = walls.length ? Math.max(...walls.flatMap((w) => [w.start.x, w.end.x])) - Math.min(...walls.flatMap((w) => [w.start.x, w.end.x])) : 0;
@@ -939,35 +1121,33 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
   const floorArea = floorplan.rooms.reduce((sum, room) => sum + room.areaSqM, 0);
   const title = planLabel(floorplan);
 
-  // Same geometry as the render: walls at the current height and thickness, plus the room floors.
+  // Same geometry as the render: walls at the current height and thickness with their corners filled, plus the room floors.
   const handleExportObj = () => {
-    const meshes: Mesh3D[] = walls.map((w) =>
-      extrudeWallWithOpenings({ ...w, height: wallHeight, thickness: wallThickness }, wallCuts(floorplan.openings, w, wallHeight)),
-    );
+    const meshes = wallMeshesOf(solidWalls, floorplan.openings);
     meshes.push(...floorplan.rooms.map((r) => generateFloorMesh(r.corners)));
     downloadOBJ(combineMeshes(meshes), `${floorplan.id}.obj`);
   };
 
   const navigationHint = isTouchScreen
-    ? 'Drag to orbit · Pinch to zoom · Two fingers to pan · Double-tap to zoom in'
-    : 'Drag to orbit · Right-drag to pan · Scroll to zoom · Double-click to zoom in';
+    ? 'Tap a wall, door or window to select it · Drag to orbit · Pinch to zoom · Two fingers to pan'
+    : 'Click a wall, door or window to select it · Drag to orbit · Right-drag to pan · Scroll to zoom';
+  const icon = (Icon: typeof ZoomIn) => <Icon className="h-[18px] w-[18px]" strokeWidth={1.5} />;
   const cameraButtons: { label: string; keys?: string; icon: React.ReactNode; onClick: () => void; pressed?: boolean }[][] = [
     [
-      { label: 'Zoom in', keys: '+', icon: <ZoomIn className="h-4 w-4" strokeWidth={1.5} />, onClick: () => zoomBy(ZOOM_STEP) },
-      { label: 'Zoom out', keys: '−', icon: <ZoomOut className="h-4 w-4" strokeWidth={1.5} />, onClick: () => zoomBy(1 / ZOOM_STEP) },
-      { label: 'Fit to view', keys: 'F', icon: <Maximize className="h-4 w-4" strokeWidth={1.5} />, onClick: fitView },
+      { label: expanded ? 'Leave full screen' : 'Full screen', keys: expanded ? 'Esc' : undefined, icon: icon(expanded ? Minimize : Maximize), onClick: toggleFullscreen, pressed: expanded },
+      ...(expanded ? [{ label: 'Measure', keys: 'M', icon: icon(Ruler), onClick: () => setIsMeasuring((prev) => !prev), pressed: isMeasuring }] : []),
     ],
     [
-      { label: 'Turn left', keys: '←', icon: <RotateCcw className="h-4 w-4" strokeWidth={1.5} />, onClick: () => rotateBy(-ROTATE_STEP_DEG) },
-      { label: 'Turn right', keys: '→', icon: <RotateCw className="h-4 w-4" strokeWidth={1.5} />, onClick: () => rotateBy(ROTATE_STEP_DEG) },
-      {
-        label: autoRotate ? 'Stop turning' : 'Turn automatically',
-        icon: autoRotate ? <Pause className="h-4 w-4" strokeWidth={1.5} /> : <Play className="h-4 w-4" strokeWidth={1.5} />,
-        onClick: () => toggleAutoRotate(),
-        pressed: autoRotate,
-      },
+      { label: 'Zoom in', keys: '+', icon: icon(ZoomIn), onClick: () => zoomBy(ZOOM_STEP) },
+      { label: 'Zoom out', keys: '−', icon: icon(ZoomOut), onClick: () => zoomBy(1 / ZOOM_STEP) },
+      { label: 'Fit the model in view', keys: 'F', icon: icon(ScanSearch), onClick: fitView },
     ],
-    [{ label: 'Reset view', keys: '0', icon: <House className="h-4 w-4" strokeWidth={1.5} />, onClick: () => applyViewPreset('perspective') }],
+    [
+      { label: 'Turn left', keys: '←', icon: icon(RotateCcw), onClick: () => rotateBy(-ROTATE_STEP_DEG) },
+      { label: 'Turn right', keys: '→', icon: icon(RotateCw), onClick: () => rotateBy(ROTATE_STEP_DEG) },
+      { label: autoRotate ? 'Stop turning' : 'Turn automatically', icon: icon(autoRotate ? Pause : Play), onClick: () => toggleAutoRotate(), pressed: autoRotate },
+    ],
+    [{ label: 'Reset view', keys: '0', icon: icon(House), onClick: () => applyViewPreset('perspective') }],
   ];
   const heading = ((cameraYaw % 360) + 360) % 360;
   const fitNow = fitRadius(isOrthographic);
@@ -979,29 +1159,37 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
       {!compact && <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <h1 className="text-[22px] font-semibold leading-7">{title}</h1>
-          <p className="num mt-1 text-muted">
+          <p className="num mt-1 text-[15px] text-muted">
             {walls.length} walls · {floorplan.rooms.length} rooms · {planWidth.toFixed(1)} × {planDepth.toFixed(1)} m · {doorCount} doors,{' '}
             {windowCount} windows
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button aria-pressed={isMeasuring} onClick={() => setIsMeasuring((prev) => !prev)} title="Measure between two floor points (M)">
+          <Button aria-pressed={isMeasuring} onClick={() => setIsMeasuring((prev) => !prev)} title="Measure between two points (M)" className="h-9 text-[14px]">
             <Ruler className="h-4 w-4" strokeWidth={1.5} />
             Measure
           </Button>
-          <Button variant="primary" onClick={handleExportObj}>
+          <Button onClick={toggleFullscreen} title="Show the 3D view on the whole screen" className="h-9 text-[14px]">
+            <Maximize className="h-4 w-4" strokeWidth={1.5} />
+            Full screen
+          </Button>
+          <Button variant="primary" onClick={handleExportObj} className="h-9 text-[14px]">
             <Download className="h-4 w-4" strokeWidth={1.5} />
             Export OBJ
           </Button>
         </div>
       </header>}
 
-      <div className={compact ? 'h-full' : 'grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_280px]'}>
+      <div className={compact ? 'h-full' : 'grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_380px]'}>
         <div
           ref={containerRef}
-          className={`relative select-none overflow-hidden rounded-lg border border-line bg-raised ${compact ? 'h-full min-h-[220px]' : 'h-[60vh] min-h-[360px] lg:h-auto'} ${
-            isMeasuring ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'
-          }`}
+          className={`select-none overflow-hidden bg-raised ${
+            fillsWindow
+              ? 'fixed inset-0 z-50'
+              : expanded
+                ? 'relative'
+                : `relative rounded-lg border border-line ${compact ? 'h-full min-h-[220px]' : 'h-[60vh] min-h-[360px] lg:h-auto'}`
+          } ${isMeasuring ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}`}
         >
           <canvas
             ref={canvasRef}
@@ -1016,6 +1204,18 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
 
           {/* Measurement drawn over the scene, in the data hue. */}
           <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+            {/* An end pointed at on top of a wall: a drop line down to the level the line is measured at. */}
+            {[
+              [liftA, screenA],
+              [liftB, targetScreen],
+            ].map(([top, foot], i) =>
+              top && foot ? (
+                <g key={i}>
+                  <line x1={top[0]} y1={top[1]} x2={foot[0]} y2={foot[1]} stroke="var(--accent)" strokeWidth="1.5" strokeDasharray="2,4" />
+                  <circle cx={top[0]} cy={top[1]} r="3" fill="var(--surface)" stroke="var(--accent)" strokeWidth="1.5" />
+                </g>
+              ) : null,
+            )}
             {screenA && targetScreen && (
               <g>
                 <line x1={screenA[0]} y1={screenA[1]} x2={targetScreen[0]} y2={targetScreen[1]} stroke="var(--surface)" strokeWidth="5" strokeLinecap="round" />
@@ -1047,7 +1247,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
                   className="overflow-visible"
                 >
                   <div className="flex justify-center">
-                    <span className="num rounded-md border border-line bg-surface px-2 py-0.5 text-[13px] font-medium text-ink">
+                    <span className="num rounded-md border border-line bg-surface px-2 py-0.5 text-[14px] font-medium text-ink">
                       {measuredDistanceMeters.toFixed(2)} m
                     </span>
                   </div>
@@ -1059,15 +1259,19 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
               <circle cx={screenB[0]} cy={screenB[1]} r="4.5" fill="var(--accent)" stroke="var(--surface)" strokeWidth="1.5" />
             )}
             {isMeasuring && screenHover && !measurePointB && (
-              <circle
-                cx={screenHover[0]}
-                cy={screenHover[1]}
-                r={isHoverSnapped ? 8 : 5}
-                fill="none"
-                stroke={isHoverSnapped ? 'var(--accent)' : 'var(--muted)'}
-                strokeWidth="1.5"
-                strokeDasharray={isHoverSnapped ? undefined : '3,3'}
-              />
+              <g>
+                {isHoverSnapped && <circle cx={screenHover[0]} cy={screenHover[1]} r="9" fill="none" stroke="var(--surface)" strokeWidth="4" />}
+                <circle
+                  cx={screenHover[0]}
+                  cy={screenHover[1]}
+                  r={isHoverSnapped ? 9 : 5}
+                  fill="none"
+                  stroke={isHoverSnapped ? 'var(--accent)' : 'var(--muted)'}
+                  strokeWidth={isHoverSnapped ? 2 : 1.5}
+                  strokeDasharray={isHoverSnapped ? undefined : '3,3'}
+                />
+                {isHoverSnapped && <circle cx={screenHover[0]} cy={screenHover[1]} r="2" fill="var(--accent)" />}
+              </g>
             )}
           </svg>
 
@@ -1079,7 +1283,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
                 type="button"
                 aria-pressed={activeView === preset}
                 onClick={() => applyViewPreset(preset)}
-                className={`h-7 rounded-[5px] px-2.5 text-[13px] transition-colors ${
+                className={`rounded-[5px] transition-colors ${compact ? 'h-7 px-2.5 text-[13px]' : 'h-8 px-3 text-[14px]'} ${
                   activeView === preset ? 'bg-active font-medium text-ink' : 'text-muted hover:bg-raised hover:text-ink'
                 }`}
               >
@@ -1098,7 +1302,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
                     aria-label={b.label}
                     aria-pressed={b.pressed}
                     title={b.keys ? `${b.label} (${b.keys})` : b.label}
-                    className={`flex h-8 w-8 items-center justify-center rounded-[5px] transition-colors ${
+                    className={`flex h-9 w-9 items-center justify-center rounded-[5px] transition-colors ${
                       b.pressed ? 'bg-active text-ink' : 'text-muted hover:bg-raised hover:text-ink'
                     }`}
                   >
@@ -1111,7 +1315,7 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
 
           {!compact && <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-end justify-between gap-2">
             {isMeasuring ? (
-              <div className="flex items-center gap-3 rounded-md border border-line bg-surface px-3 py-2 text-[13px]">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-line bg-surface px-3 py-2 text-[14px]">
                 {measurePointA && activeMeasureTarget ? (
                   <>
                     <span className="num font-medium text-ink">{measuredDistanceMeters.toFixed(2)} m</span>
@@ -1126,147 +1330,203 @@ export const OpenGLCanvas: React.FC<OpenGLCanvasProps> = ({
                     </button>
                   </>
                 ) : (
-                  <span className="text-muted">{isTouchScreen ? 'Tap' : 'Click'} a point on the floor, then a second one.</span>
+                  <span className="text-muted">
+                    {isTouchScreen ? 'Tap' : 'Click'} a corner, then a second one.{!isTouchScreen && ' Hold Shift to measure straight along the plan.'}
+                  </span>
                 )}
                 <label className="flex items-center gap-1.5 border-l border-line pl-3 text-muted">
-                  <input type="checkbox" checked={snapToCorners} onChange={() => setSnapToCorners(!snapToCorners)} className="accent-[var(--text)]" />
+                  <input type="checkbox" checked={snapToCorners} onChange={() => setSnapToCorners(!snapToCorners)} className="h-4 w-4 accent-[var(--text)]" />
                   Snap to corners
                 </label>
               </div>
+            ) : expanded && picked && pickedTitle ? (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border-2 border-[#e08a12] bg-surface px-3 py-1.5 text-[14px]">
+                <span className="font-medium text-ink">{pickedTitle}</span>
+                <span className="num text-muted">{pickedFacts}</span>
+                {onEdit && (
+                  <Button variant="ghost" onClick={deletePicked} title={`Delete this ${pickedTitle.toLowerCase()} (Delete)`}>
+                    <Trash2 className="h-4 w-4" strokeWidth={1.5} />
+                    Delete
+                  </Button>
+                )}
+                <Button variant="ghost" onClick={() => setPicked(null)}>
+                  Deselect
+                </Button>
+              </div>
+            ) : removed ? (
+              <div className="flex items-center gap-3 rounded-md border border-line bg-surface px-3 py-1.5 text-[14px]" role="status">
+                {removed} deleted
+                {onUndo && (
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      onUndo();
+                      setRemoved(null);
+                    }}
+                  >
+                    <Undo2 className="h-4 w-4" strokeWidth={1.5} />
+                    Undo
+                  </Button>
+                )}
+              </div>
             ) : (
-              <span className="rounded-md bg-surface/80 px-2 py-1 text-xs text-muted">{navigationHint}</span>
+              <span className="rounded-md bg-surface/80 px-2 py-1 text-[13px] text-muted">{navigationHint}</span>
             )}
           </div>}
         </div>
 
-        {!compact && <aside className="flex flex-col gap-6 lg:overflow-y-auto" aria-label="Model settings">
-          <section>
-            <SectionTitle>Plan</SectionTitle>
-            <div className="rounded-md bg-raised p-3">
-              <PlanThumbnail walls={walls} openings={floorplan.openings} wallThickness={wallThickness} className="h-36 w-full" title={`Top-down drawing of ${title}`} />
-            </div>
-            <div className="mt-1">
-              <KeyValue label="Floor area">
-                {floorArea.toFixed(1)} <span className="text-muted">m²</span>
-              </KeyValue>
-            </div>
-          </section>
+        {!compact && <aside className="flex flex-col gap-3 lg:overflow-y-auto" aria-label="Model settings">
+          <ControlSize size="lg">
+            {picked && pickedTitle && (
+              <section className="rounded-lg border-2 border-[#e08a12] p-4" aria-label="Selected">
+                <p className="text-[13px] text-muted">Selected</p>
+                <h2 className="text-[17px] font-semibold leading-6">{pickedTitle}</h2>
+                <p className="num mt-1 text-[14px] leading-5 text-muted">{pickedFacts}</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {onEdit && (
+                    <Button onClick={deletePicked} title={`Delete this ${pickedTitle.toLowerCase()} (Delete)`} className="h-9 text-[14px]">
+                      <Trash2 className="h-4 w-4" strokeWidth={1.5} />
+                      Delete
+                    </Button>
+                  )}
+                  {onOpenEditor && (
+                    <Button variant="ghost" onClick={onOpenEditor} title="Move or resize it in Edit plan" className="h-9 text-[14px]">
+                      <PencilRuler className="h-4 w-4" strokeWidth={1.5} />
+                      Edit plan
+                    </Button>
+                  )}
+                  <Button variant="ghost" onClick={() => setPicked(null)} className="h-9 text-[14px]">
+                    Deselect
+                  </Button>
+                </div>
+              </section>
+            )}
 
-          <section>
-            <SectionTitle>Camera</SectionTitle>
-            <Slider
-              label="Turn"
-              value={heading}
-              display={`${Math.round(heading)}°`}
-              min={0}
-              max={359}
-              step={1}
-              onChange={(v) => {
-                toggleAutoRotate(false);
-                setActiveView(null);
-                setCameraYaw(v);
-              }}
-            />
-            <Slider
-              label="Tilt"
-              value={cameraPitch}
-              display={`${Math.round(cameraPitch)}°`}
-              min={5}
-              max={89}
-              step={1}
-              onChange={(v) => {
-                stopCameraMotion();
-                setActiveView(null);
-                setCameraPitch(v);
-              }}
-            />
-            <Slider
-              label="Zoom"
-              value={zoomLog}
-              display={`${Math.round(2 ** zoomLog * 100)}%`}
-              min={Math.ceil(Math.log2(fitNow / maxRadiusRef.current) * 20) / 20}
-              max={Math.floor(Math.log2(fitNow / MIN_RADIUS) * 20) / 20}
-              step={0.05}
-              onChange={(v) => {
-                stopCameraMotion();
-                setCameraRadius(clampR(fitNow / 2 ** v));
-              }}
-            />
-            <Switch label="Turn automatically" checked={autoRotate} onChange={(on) => toggleAutoRotate(on)} />
-            <p className="mt-1 text-xs text-muted">Keys: ← → turn · ↑ ↓ tilt · + − zoom · F fit · 0 reset</p>
-          </section>
+            <PanelSection title="Walls">
+              <Slider label="Height" value={wallHeight} display={`${wallHeight.toFixed(1)} m`} min={1.5} max={4.5} step={0.1} onChange={onChangeWallHeight} />
+              <Slider label="Thickness" value={wallThickness} display={`${wallThickness.toFixed(2)} m`} min={0.1} max={0.4} step={0.02} onChange={onChangeWallThickness} />
+              <Switch label="Furniture" checked={showFurniture} onChange={onToggleFurniture} />
+            </PanelSection>
 
-          <section>
-            <SectionTitle>View</SectionTitle>
-            <div className="flex flex-col gap-2">
-              <Segmented
-                label="Projection"
-                value={isOrthographic ? 'ortho' : 'perspective'}
-                onChange={(v) => setIsOrthographic(v === 'ortho')}
-                options={[
-                  { value: 'perspective', label: 'Perspective' },
-                  { value: 'ortho', label: 'Orthographic' },
-                ]}
+            <PanelSection title="View">
+              <div className="flex flex-col gap-2">
+                <Segmented
+                  label="Projection"
+                  value={isOrthographic ? 'ortho' : 'perspective'}
+                  onChange={(v) => setIsOrthographic(v === 'ortho')}
+                  options={[
+                    { value: 'perspective', label: 'Perspective' },
+                    { value: 'ortho', label: 'Orthographic' },
+                  ]}
+                />
+                <Segmented
+                  label="Shading"
+                  value={renderMode}
+                  onChange={setRenderMode}
+                  options={[
+                    { value: 'shaded', label: 'Shaded' },
+                    { value: 'normals', label: 'Normals' },
+                    { value: 'depth', label: 'Depth' },
+                  ]}
+                />
+                <label className="flex h-10 items-center justify-between gap-3 text-[15px]">
+                  Material
+                  <select
+                    value={renderStyle}
+                    onChange={(e) => setRenderStyle(e.target.value as RenderStyle)}
+                    className="h-9 rounded-md border border-control bg-surface px-2 text-[15px] text-ink"
+                  >
+                    <option value="architectural">Plaster</option>
+                    <option value="blueprint">Blueprint</option>
+                    <option value="clay">Clay</option>
+                  </select>
+                </label>
+                <Switch label="Wireframe" checked={isWireframe} onChange={setIsWireframe} />
+              </div>
+            </PanelSection>
+
+            <PanelSection title="Camera" startClosed>
+              <Slider
+                label="Turn"
+                value={heading}
+                display={`${Math.round(heading)}°`}
+                min={0}
+                max={359}
+                step={1}
+                onChange={(v) => {
+                  toggleAutoRotate(false);
+                  setActiveView(null);
+                  setCameraYaw(v);
+                }}
               />
-              <Segmented
-                label="Shading"
-                value={renderMode}
-                onChange={setRenderMode}
-                options={[
-                  { value: 'shaded', label: 'Shaded' },
-                  { value: 'normals', label: 'Normals' },
-                  { value: 'depth', label: 'Depth' },
-                ]}
+              <Slider
+                label="Tilt"
+                value={cameraPitch}
+                display={`${Math.round(cameraPitch)}°`}
+                min={5}
+                max={89}
+                step={1}
+                onChange={(v) => {
+                  stopCameraMotion();
+                  setActiveView(null);
+                  setCameraPitch(v);
+                }}
               />
-              <label className="flex h-8 items-center justify-between gap-3 text-[13px]">
-                Material
-                <select
-                  value={renderStyle}
-                  onChange={(e) => setRenderStyle(e.target.value as RenderStyle)}
-                  className="h-8 rounded-md border border-control bg-surface px-2 text-[13px] text-ink"
-                >
-                  <option value="architectural">Plaster</option>
-                  <option value="blueprint">Blueprint</option>
-                  <option value="clay">Clay</option>
-                </select>
-              </label>
-              <Switch label="Wireframe" checked={isWireframe} onChange={setIsWireframe} />
-            </div>
-          </section>
+              <Slider
+                label="Zoom"
+                value={zoomLog}
+                display={`${Math.round(2 ** zoomLog * 100)}%`}
+                min={Math.ceil(Math.log2(fitNow / maxRadiusRef.current) * 20) / 20}
+                max={Math.floor(Math.log2(fitNow / MIN_RADIUS) * 20) / 20}
+                step={0.05}
+                onChange={(v) => {
+                  stopCameraMotion();
+                  setCameraRadius(clampR(fitNow / 2 ** v));
+                }}
+              />
+              <Switch label="Turn automatically" checked={autoRotate} onChange={(on) => toggleAutoRotate(on)} />
+              <p className="mt-1 text-[13px] leading-5 text-muted">Keys: ← → turn · ↑ ↓ tilt · + − zoom · F fit · 0 reset · M measure</p>
+            </PanelSection>
 
-          <section>
-            <SectionTitle>Walls</SectionTitle>
-            <Slider
-              label="Height"
-              value={wallHeight}
-              display={`${wallHeight.toFixed(1)} m`}
-              min={1.5}
-              max={4.5}
-              step={0.1}
-              onChange={onChangeWallHeight}
-            />
-            <Slider
-              label="Thickness"
-              value={wallThickness}
-              display={`${wallThickness.toFixed(2)} m`}
-              min={0.1}
-              max={0.4}
-              step={0.02}
-              onChange={onChangeWallThickness}
-            />
-            <Switch label="Furniture" checked={showFurniture} onChange={onToggleFurniture} />
-          </section>
-
-          <section>
-            <SectionTitle>Model</SectionTitle>
-            <KeyValue label="Vertices">{stats.vertices.toLocaleString()}</KeyValue>
-            <KeyValue label="Triangles">{stats.triangles.toLocaleString()}</KeyValue>
-            <KeyValue label="Frame rate">
-              {Number.isFinite(stats.fps) && stats.fps > 0 ? stats.fps : 60} <span className="text-muted">fps</span>
-            </KeyValue>
-          </section>
+            <PanelSection title="Plan and model" startClosed>
+              <div className="rounded-md bg-raised p-3">
+                <PlanThumbnail walls={walls} openings={floorplan.openings} wallThickness={wallThickness} className="h-36 w-full" title={`Top-down drawing of ${title}`} />
+              </div>
+              <div className="mt-1">
+                <KeyValue label="Floor area">
+                  {floorArea.toFixed(1)} <span className="text-muted">m²</span>
+                </KeyValue>
+                <KeyValue label="Vertices">{stats.vertices.toLocaleString()}</KeyValue>
+                <KeyValue label="Triangles">{stats.triangles.toLocaleString()}</KeyValue>
+                <KeyValue label="Frame rate">
+                  {Number.isFinite(stats.fps) && stats.fps > 0 ? stats.fps : 60} <span className="text-muted">fps</span>
+                </KeyValue>
+              </div>
+            </PanelSection>
+          </ControlSize>
         </aside>}
       </div>
     </div>
+  );
+};
+
+/** One card of the side panel: a title that opens and closes it, so the settings used most stay in view. */
+const PanelSection: React.FC<{ title: string; startClosed?: boolean; children: React.ReactNode }> = ({ title, startClosed = false, children }) => {
+  const [open, setOpen] = useState(!startClosed);
+  return (
+    <section className="rounded-lg border border-line">
+      <h2>
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="flex h-12 w-full items-center justify-between gap-3 rounded-lg px-4 text-left text-[16px] font-semibold text-ink hover:bg-raised"
+        >
+          {title}
+          <ChevronDown className={`h-[18px] w-[18px] text-muted transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={1.5} />
+        </button>
+      </h2>
+      {open && <div className="px-4 pb-4">{children}</div>}
+    </section>
   );
 };

@@ -162,3 +162,13 @@ test("[Edit] a drawn plan's rooms follow its walls through edits and undo; hand-
   t = planReducer(t, { type: 'edit', walls: moveWall(first.walls, first.ids[0], { x: 0, z: -1 }), openings: [] });
   assert.deepEqual(t.plan.rooms.map((r) => r.id), ['living'], 'rooms named by hand are left as they are');
 });
+
+test('[Edit] a click on a door that is already there finds it, so it is picked instead of doubled', async () => {
+  const { openingAt } = await import('./planEditing');
+  const wall = { id: 'w', start: { x: 0, z: 0 }, end: { x: 4, z: 0 }, thickness: 0.2, height: 2.8 };
+  const door = { id: 'door-1', kind: 'door' as const, wallId: 'w', position: 0.5, width: 1, sill: 0, height: 2.1 };
+  assert.equal(openingAt([door], wall, 0.5)?.id, 'door-1');
+  assert.equal(openingAt([door], wall, 0.4)?.id, 'door-1', 'anywhere across its width (1.5 m to 2.5 m)');
+  assert.equal(openingAt([door], wall, 0.2), null, 'beside it is free wall');
+  assert.equal(openingAt([door], { ...wall, id: 'other' }, 0.5), null, 'another wall');
+});

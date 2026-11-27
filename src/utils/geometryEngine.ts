@@ -166,7 +166,7 @@ export function extrudeWallWithOpenings(wall: WallSegment2D, openings: Opening[]
 }
 
 /** A closed box along the floor from `start` to `end`, `thickness` wide, between heights y0 and y1. */
-function extrudeBox(start: Point2D, end: Point2D, thickness: number, y0: number, y1: number): Mesh3D {
+export function extrudeBox(start: Point2D, end: Point2D, thickness: number, y0: number, y1: number): Mesh3D {
   const dx = end.x - start.x;
   const dz = end.z - start.z;
   const len = Math.hypot(dx, dz);
@@ -297,6 +297,92 @@ function extrudeBox(start: Point2D, end: Point2D, thickness: number, y0: number,
   );
 
   return { vertices, indices };
+}
+
+/**
+ * A closed prism over a convex polygon on the floor, from y0 up to y1, with outward normals and
+ * counter-clockwise triangles like the wall boxes.
+ */
+export function extrudePrism(polygon: Point2D[], y0: number, y1: number): Mesh3D {
+  if (polygon.length < 3 || y1 - y0 < 1e-6) return { vertices: [], indices: [] };
+  const vertices: Vertex3D[] = [];
+  const indices: number[] = [];
+  const cx = polygon.reduce((sum, p) => sum + p.x, 0) / polygon.length;
+  const cz = polygon.reduce((sum, p) => sum + p.z, 0) / polygon.length;
+  /** Adds a flat face, turning it round if its triangles would face away from `out`. */
+  const addFace = (points: [number, number, number][], out: [number, number, number]) => {
+    const [a, b, c] = points;
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const ordered = n[0] * out[0] + n[1] * out[1] + n[2] * out[2] >= 0 ? points : [...points].reverse();
+    const length = Math.hypot(out[0], out[1], out[2]) || 1;
+    const normal: [number, number, number] = [out[0] / length, out[1] / length, out[2] / length];
+    const base = vertices.length;
+    ordered.forEach((position, i) => vertices.push({ position, normal, texCoord: [i % 2, i > 1 ? 1 : 0] }));
+    for (let i = 1; i < ordered.length - 1; i++) indices.push(base, base + i, base + i + 1);
+  };
+  addFace(polygon.map((p) => [p.x, y1, p.z]), [0, 1, 0]);
+  addFace(polygon.map((p) => [p.x, y0, p.z]), [0, -1, 0]);
+  polygon.forEach((p, i) => {
+    const q = polygon[(i + 1) % polygon.length];
+    const side: [number, number, number] = [-(q.z - p.z), 0, q.x - p.x];
+    // Outward is away from the middle of the polygon.
+    const away = side[0] * ((p.x + q.x) / 2 - cx) + side[2] * ((p.z + q.z) / 2 - cz) >= 0 ? side : ([-side[0], 0, -side[2]] as [number, number, number]);
+    if (Math.hypot(away[0], away[2]) < 1e-9) return;
+    addFace([[p.x, y0, p.z], [q.x, y0, q.z], [q.x, y1, q.z], [p.x, y1, p.z]], away);
+  });
+  return { vertices, indices };
+}
+
+/**
+ * The pieces missing at outside corners. Walls are boxes that end on their centre lines, so where
+ * two of them meet at an angle the outer side of the corner is left open (a square notch at a
+ * right angle). This returns the floor outline of each missing piece: the corner point, the two
+ * end corners beside the gap, and the point where the walls' outer faces meet.
+ */
+export function cornerFills(walls: WallSegment2D[]): Point2D[][] {
+  const JOIN = 0.02;
+  type End = { node: Point2D; ax: number; az: number; half: number; angle: number };
+  const groups: End[][] = [];
+  for (const wall of walls) {
+    const dx = wall.end.x - wall.start.x;
+    const dz = wall.end.z - wall.start.z;
+    const length = Math.hypot(dx, dz);
+    if (length < 1e-6) continue;
+    const half = (wall.thickness || 0.2) / 2;
+    for (const [node, ax, az] of [
+      [wall.start, dx / length, dz / length],
+      [wall.end, -dx / length, -dz / length],
+    ] as [Point2D, number, number][]) {
+      const end: End = { node, ax, az, half, angle: Math.atan2(az, ax) };
+      const group = groups.find((g) => Math.hypot(g[0].node.x - node.x, g[0].node.z - node.z) < JOIN);
+      if (group) group.push(end);
+      else groups.push([end]);
+    }
+  }
+
+  const fills: Point2D[][] = [];
+  for (const group of groups) {
+    if (group.length < 2) continue;
+    const ends = [...group].sort((a, b) => a.angle - b.angle);
+    const node = ends[0].node;
+    ends.forEach((a, i) => {
+      const b = ends[(i + 1) % ends.length];
+      const gap = (b.angle - a.angle + 2 * Math.PI) % (2 * Math.PI) || 2 * Math.PI;
+      if (gap <= Math.PI + 0.02 || gap >= 2 * Math.PI - 0.02) return; // only the open, outer side of a corner
+      // The end corners on the open side: a's turned towards the gap, b's turned back towards it.
+      const pa = { x: node.x - a.az * a.half, z: node.z + a.ax * a.half };
+      const pb = { x: node.x + b.az * b.half, z: node.z - b.ax * b.half };
+      const cross = a.ax * b.az - a.az * b.ax;
+      const s = Math.abs(cross) < 1e-6 ? NaN : ((pb.x - pa.x) * b.az - (pb.z - pa.z) * b.ax) / cross;
+      const meet = { x: pa.x + a.ax * s, z: pa.z + a.az * s };
+      const reach = Math.hypot(meet.x - node.x, meet.z - node.z);
+      // A very sharp corner would run to a long spike: cut it off square instead.
+      fills.push(Number.isFinite(reach) && reach <= 3 * Math.max(a.half, b.half) ? [node, pa, meet, pb] : [node, pa, pb]);
+    });
+  }
+  return fills;
 }
 
 /**

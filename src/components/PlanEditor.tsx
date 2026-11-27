@@ -15,7 +15,7 @@ import {
   DoorOpen,
   FilePlus2,
   Grid3x3,
-  Maximize,
+  ScanSearch,
   MousePointer2,
   PenLine,
   Redo2,
@@ -50,6 +50,7 @@ import {
   wallLength,
   type SnapKind,
   type WallEnd,
+  openingAt,
 } from '../utils/planEditing';
 import { labelPoint } from '../utils/rooms';
 import { Button, KeyValue, LinkButton, PageHeader, SectionTitle } from './ui';
@@ -485,7 +486,12 @@ export const PlanEditor: React.FC<{
       }
     } else if (tool === 'door' || tool === 'window') {
       const hit = nearestWall(walls, raw, Math.max(0.3, 14 * px));
-      if (hit) {
+      const existing = hit && openingAt(openings, hit.wall, hit.t);
+      if (existing) {
+        // A click on a door or window that is already there picks it (to move, resize or delete) instead of adding another on top.
+        chooseTool('select');
+        setSelection({ kind: 'opening', id: existing.id });
+      } else if (hit) {
         const placed = placeOpening(openings, hit.wall, tool, hit.t);
         edit({ openings: placed.openings });
         setSelection({ kind: 'opening', id: placed.id });
@@ -497,7 +503,7 @@ export const PlanEditor: React.FC<{
   const ghost = useMemo(() => {
     if ((tool !== 'door' && tool !== 'window') || !pointer) return null;
     const hit = nearestWall(walls, pointer.raw, Math.max(0.3, 14 * px));
-    if (!hit) return null;
+    if (!hit || openingAt(openings, hit.wall, hit.t)) return null; // over one that is there, a click picks it
     const placed = placeOpening(openings, hit.wall, tool, hit.t);
     return { wall: hit.wall, opening: placed.openings[placed.openings.length - 1] };
   }, [tool, pointer, walls, openings, px]);
@@ -666,7 +672,7 @@ export const PlanEditor: React.FC<{
                 <ZoomIn className="h-4 w-4" strokeWidth={1.5} />
               </Button>
               <Button variant="ghost" onClick={() => setView(fitView(walls))} title="Fit the plan (F)" aria-label="Fit the plan">
-                <Maximize className="h-4 w-4" strokeWidth={1.5} />
+                <ScanSearch className="h-4 w-4" strokeWidth={1.5} />
               </Button>
             </div>
           </div>
@@ -976,6 +982,46 @@ export const PlanEditor: React.FC<{
                       ))}
                     </ul>
                   </div>
+                )}
+                {openings.length > 0 && (
+                  <details className="mt-3">
+                    <summary className="cursor-pointer text-[13px] text-muted hover:text-ink">
+                      Doors and windows <span className="num">· {openings.length}</span>
+                    </summary>
+                    <ul className="mt-1 flex max-h-44 flex-col overflow-y-auto">
+                      {[...openings].sort((a, b) => a.kind.localeCompare(b.kind)).map((o) => {
+                        const name = `${o.kind === 'door' ? 'Door' : 'Window'} ${openings.filter((x) => x.kind === o.kind).indexOf(o) + 1}`;
+                        return (
+                          <li key={o.id} className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                chooseTool('select');
+                                setSelection({ kind: 'opening', id: o.id });
+                              }}
+                              title={`Select ${name.toLowerCase()} to move or resize it`}
+                              className="flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 text-left text-[13px] text-ink hover:bg-raised"
+                            >
+                              <span className="flex items-center gap-2">
+                                {o.kind === 'door' ? <DoorOpen className="h-4 w-4 text-muted" strokeWidth={1.5} /> : <AppWindow className="h-4 w-4 text-muted" strokeWidth={1.5} />}
+                                {name}
+                              </span>
+                              <span className="num text-muted">{o.width.toFixed(2)} m</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => edit({ openings: openings.filter((x) => x.id !== o.id) })}
+                              aria-label={`Delete ${name.toLowerCase()}`}
+                              title={`Delete ${name.toLowerCase()}`}
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted hover:bg-raised hover:text-ink"
+                            >
+                              <Trash2 className="h-4 w-4" strokeWidth={1.5} />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </details>
                 )}
                 <p className="mt-3 text-[13px] leading-5 text-muted">
                   Select a wall, door or window to change it. Keys: 1 Select · 2 Room · 3 Wall · 4 Door · 5 Window · Delete · F fit. While drawing, type a

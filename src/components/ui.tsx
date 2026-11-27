@@ -4,7 +4,16 @@
  * controls, 6px control radius, near-black primary, no shadows at rest).
  */
 
-import React from 'react';
+import React, { createContext, useContext } from 'react';
+
+/**
+ * How large the controls inside are: 'md' (32px, 13px text) for dense tool panels, 'lg' (40px,
+ * 15px text, a bigger slider handle) for a panel that is the main place settings are changed.
+ */
+const SizeContext = createContext<'md' | 'lg'>('md');
+export const ControlSize: React.FC<{ size: 'md' | 'lg'; children: React.ReactNode }> = ({ size, children }) => (
+  <SizeContext.Provider value={size}>{children}</SizeContext.Provider>
+);
 
 type ButtonVariant = 'primary' | 'secondary' | 'ghost';
 
@@ -57,6 +66,7 @@ export function Segmented<T extends string>({
   onChange: (value: T) => void;
   className?: string;
 }) {
+  const large = useContext(SizeContext) === 'lg';
   return (
     <div role="radiogroup" aria-label={label} className={`inline-flex rounded-md border border-line bg-raised p-0.5 ${className}`}>
       {options.map((option) => {
@@ -68,7 +78,7 @@ export function Segmented<T extends string>({
             role="radio"
             aria-checked={selected}
             onClick={() => onChange(option.value)}
-            className={`inline-flex h-7 flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-[5px] px-2.5 text-[13px] transition-colors ${
+            className={`inline-flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-[5px] px-2.5 transition-colors ${large ? 'h-9 text-[15px]' : 'h-7 text-[13px]'} ${
               selected ? 'bg-surface font-medium text-ink ring-1 ring-line' : 'text-muted hover:text-ink'
             }`}
           >
@@ -85,24 +95,27 @@ export const Switch: React.FC<{ label: string; checked: boolean; onChange: (chec
   label,
   checked,
   onChange,
-}) => (
-  <label className="flex h-8 cursor-pointer items-center justify-between gap-3 text-[13px] text-ink">
-    {label}
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={() => onChange(!checked)}
-      className={`relative h-[18px] w-8 shrink-0 rounded-full transition-colors ${checked ? 'bg-primary' : 'bg-control'}`}
-    >
-      <span
-        className={`absolute top-[2px] h-[14px] w-[14px] rounded-full bg-surface transition-transform ${
-          checked ? 'translate-x-[16px]' : 'translate-x-[2px]'
-        }`}
-      />
-    </button>
-  </label>
-);
+}) => {
+  const large = useContext(SizeContext) === 'lg';
+  return (
+    <label className={`flex cursor-pointer items-center justify-between gap-3 text-ink ${large ? 'h-10 text-[15px]' : 'h-8 text-[13px]'}`}>
+      {label}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative shrink-0 rounded-full transition-colors ${large ? 'h-6 w-11' : 'h-[18px] w-8'} ${checked ? 'bg-primary' : 'bg-control'}`}
+      >
+        <span
+          className={`absolute top-[2px] rounded-full bg-surface transition-transform ${large ? 'h-5 w-5' : 'h-[14px] w-[14px]'} ${
+            checked ? (large ? 'translate-x-[22px]' : 'translate-x-[16px]') : 'translate-x-[2px]'
+          }`}
+        />
+      </button>
+    </label>
+  );
+};
 
 export type PillTone = 'positive' | 'warning' | 'negative' | 'neutral' | 'accent';
 
@@ -191,12 +204,15 @@ export const SectionTitle: React.FC<{ children: React.ReactNode; aside?: React.R
 );
 
 /** Label on the left, figure on the right, on one row. */
-export const KeyValue: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
-  <div className="flex h-8 items-center justify-between gap-3 text-[13px]">
-    <span className="text-muted">{label}</span>
-    <span className="num text-right text-ink">{children}</span>
-  </div>
-);
+export const KeyValue: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => {
+  const large = useContext(SizeContext) === 'lg';
+  return (
+    <div className={`flex items-center justify-between gap-3 ${large ? 'h-9 text-[15px]' : 'h-8 text-[13px]'}`}>
+      <span className="text-muted">{label}</span>
+      <span className="num text-right text-ink">{children}</span>
+    </div>
+  );
+};
 
 /** A labelled range slider with its value shown on the right. */
 export const Slider: React.FC<{
@@ -209,22 +225,27 @@ export const Slider: React.FC<{
   onChange: (value: number) => void;
   disabled?: boolean;
   hint?: string;
-}> = ({ label, value, display, min, max, step, onChange, disabled, hint }) => (
-  <label className="block py-1">
-    <div className="flex items-center justify-between text-[13px]">
-      <span className="text-ink">{label}</span>
-      <span className="num text-muted">{display}</span>
-    </div>
-    <input
-      type="range"
-      min={min}
-      max={max}
-      step={step}
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onChange(Number(e.target.value))}
-      className="mt-1 w-full accent-[var(--text)]"
-    />
-    {hint && <p className="text-xs text-muted">{hint}</p>}
-  </label>
-);
+}> = ({ label, value, display, min, max, step, onChange, disabled, hint }) => {
+  const large = useContext(SizeContext) === 'lg';
+  const filled = max > min ? Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100)) : 0;
+  return (
+    <label className={`block ${large ? 'py-1.5' : 'py-1'}`}>
+      <div className={`flex items-center justify-between ${large ? 'text-[15px]' : 'text-[13px]'}`}>
+        <span className="text-ink">{label}</span>
+        <span className={`num ${large ? 'font-medium text-ink' : 'text-muted'}`}>{display}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={large ? ({ '--filled': `${filled}%` } as React.CSSProperties) : undefined}
+        className={large ? 'range-lg mt-1 w-full' : 'mt-1 w-full accent-[var(--text)]'}
+      />
+      {hint && <p className="text-xs text-muted">{hint}</p>}
+    </label>
+  );
+};
