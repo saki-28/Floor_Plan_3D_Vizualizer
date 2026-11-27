@@ -1,4 +1,5 @@
-"""Trains the wall model on CubiCasa5k, picks the best checkpoint on val plans, then predicts the test plans.
+"""Trains the wall model on CubiCasa5k (with drawn ResPlan plans mixed in, if given), picks the best checkpoint on CubiCasa5k's
+val plans, then predicts the test plans and, if given, scores the CVC-FP plans it never trained on.
 
 One GPU, the Mac's GPU or the CPU:
     python3 -I training/train.py --data data/cubicasa5k/cubicasa5k --labels <dir> --out <dir> [--steps N] [--minutes M]
@@ -32,7 +33,9 @@ import torch.nn.functional as F  # noqa: E402
 from torch.utils.data import DataLoader, DistributedSampler, RandomSampler  # noqa: E402
 
 from cubicasa import DOOR, WALL, WINDOW, TrainCrops, ink, plan_name, prepare_labels, read_split  # noqa: E402
-from model import UNet, predict_plan  # noqa: E402
+from heldout import cvcfp_plans, score_cvcfp  # noqa: E402
+from model import build_model, predict_plan  # noqa: E402
+from resplan import MixedCrops, load_resplan  # noqa: E402
 
 
 def collate(batch):
@@ -73,7 +76,8 @@ class TrainConfig:
     data: str  # folder holding train.txt, val.txt, test.txt
     labels: str  # folder of class-map PNGs (drawn if missing)
     out: str
-    width: int = 32  # U-Net width: 32 is 7.8 M parameters
+    arch: str = 'unet'  # 'unet' (from scratch) or 'resunet34' (ImageNet-pretrained ResNet-34 encoder, U-Net decoder with attention)
+    width: int = 32  # U-Net width: 32 is 7.8 M parameters (unet only)
     crop: int = 512
     batch: int = 8  # crops per GPU per step
     per_plan: int = 4  # crops taken from each plan load
@@ -87,6 +91,12 @@ class TrainConfig:
     workers: int = 2  # data loader processes per GPU
     log_every: int = 200
     device: str = 'auto'
+    resplan: str = ''  # ResPlan.pkl: its training plans are drawn in random styles and mixed in ('' = CubiCasa5k only)
+    resplan_share: float = 0.4  # share of the training items that are drawn ResPlan plans
+    resplan_limit: int = 0  # use only the first N ResPlan plans (0 = all; for quick checks)
+    heldout: str = ''  # CVC-FP folder (X/ and Y/): scored at the end, never trained on ('' = skip)
+    heldout_limit: int = 0  # score only the first N CVC-FP plans (0 = all 96)
+    pretrained: int = 1  # resunet34: start the encoder from ImageNet weights (downloaded once); 0 = from scratch
 
 
 def train_worker(rank: int, world: int, cfg: TrainConfig) -> None:
@@ -146,12 +156,15 @@ def train_worker(rank: int, world: int, cfg: TrainConfig) -> None:
     val_plans = read_split(cfg.data, 'val')[:cfg.val_plans]
     test_plans = read_split(cfg.data, 'test')[:cfg.test_limit]
     dataset = TrainCrops(cfg.data, cfg.labels, train_plans, size=cfg.crop, per_plan=cfg.per_plan)
+    if cfg.resplan:
+        dataset = MixedCrops(dataset, load_resplan(cfg.resplan, limit=cfg.resplan_limit), share=cfg.resplan_share)
     sampler = DistributedSampler(dataset, shuffle=True) if distributed else RandomSampler(dataset)
     loader = DataLoader(dataset, batch_size=max(1, cfg.batch // cfg.per_plan), sampler=sampler, num_workers=cfg.workers,
                         collate_fn=collate, pin_memory=cuda, drop_last=True, persistent_workers=cfg.workers > 0,
                         prefetch_factor=4 if cfg.workers > 0 else None)
 
-    net = UNet(cfg.width).to(device)
+    config = {'arch': 'unet', 'width': cfg.width} if cfg.arch == 'unet' else {'arch': cfg.arch}
+    net = build_model(config, pretrained=bool(cfg.pretrained)).to(device)
     if cuda:
         net = net.to(memory_format=torch.channels_last)
     model = (
@@ -162,7 +175,8 @@ def train_worker(rank: int, world: int, cfg: TrainConfig) -> None:
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=1e-4)
     scaler = torch.amp.GradScaler('cuda', enabled=cuda)
     params = sum(p.numel() for p in net.parameters()) / 1e6
-    log(f'{world} × {device.type}, {len(train_plans)} train plans, {params:.1f} M params, '
+    extra = f' + drawn ResPlan plans ({dataset.extra} of every {len(dataset)} items)' if cfg.resplan else ''
+    log(f'{world} × {device.type}, {cfg.arch}, {len(train_plans)} train plans{extra}, {params:.1f} M params, '
         f'{cfg.batch * world} crops per step, up to {cfg.steps} steps or {cfg.minutes:.0f} min')
 
     def evaluate(plans: list[str], pred_dir: str | None = None) -> tuple[dict, list[dict]]:
@@ -291,6 +305,32 @@ def train_worker(rank: int, world: int, cfg: TrainConfig) -> None:
                 f'(median {summary["median_iou"]:.3f}, precision {summary["precision"]:.3f}, recall {summary["recall"]:.3f}), '
                 f'door+window IoU {summary["openings_iou"]:.3f}, {summary["ms_per_plan"]:.0f} ms per plan')
     barrier()
+
+    if cfg.heldout:
+        # Plans of another country and other drawing styles, never trained on: split between the processes like the test plans.
+        state = torch.load(os.path.join(cfg.out, 'model_best.pt'), map_location=device)
+        net.load_state_dict(state['state'])
+        net.eval()
+        plans = cvcfp_plans(cfg.heldout)[:cfg.heldout_limit or None]
+        rows = score_cvcfp(net, cfg.heldout, device, [p for i, p in enumerate(plans) if i % world == rank])
+        with open(os.path.join(cfg.out, f'heldout_rows_{rank}.json'), 'w') as f:
+            json.dump(rows, f)
+        barrier()
+        if rank == 0:
+            all_rows = []
+            for r in range(world):
+                path = os.path.join(cfg.out, f'heldout_rows_{r}.json')
+                all_rows += json.load(open(path))
+                os.remove(path)
+            all_rows.sort(key=lambda r: int(r['plan']))
+            openings = [r['openings_iou'] for r in all_rows if r['openings_iou'] is not None]
+            summary = {'plans': len(all_rows), 'iou': float(np.mean([r['iou'] for r in all_rows])), 'median_iou': float(np.median([r['iou'] for r in all_rows])),
+                       'precision': float(np.mean([r['precision'] for r in all_rows])), 'recall': float(np.mean([r['recall'] for r in all_rows])),
+                       'openings_iou': float(np.mean(openings)) if openings else None}
+            json.dump({'summary': summary, 'rows': all_rows}, open(os.path.join(cfg.out, 'heldout_cvcfp.json'), 'w'), indent=1)
+            log(f'CVC-FP, never trained on, {summary["plans"]} plans: wall IoU {summary["iou"]:.3f} (median {summary["median_iou"]:.3f}, '
+                f'precision {summary["precision"]:.3f}, recall {summary["recall"]:.3f}), door+window IoU {summary["openings_iou"] or 0:.3f}')
+        barrier()
     if log_file:
         log_file.close()
     if distributed:

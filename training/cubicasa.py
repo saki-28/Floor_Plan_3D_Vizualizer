@@ -164,6 +164,52 @@ def ink(gray: np.ndarray) -> np.ndarray:
     return 1.0 - gray.astype(np.float32) / 255.0
 
 
+def random_crop(gray: np.ndarray, labels: np.ndarray, rng: np.random.Generator, size: int = 512, augment: bool = True):
+    """One training crop of a plan (gray image and class map of the same size), as described in TrainCrops."""
+    h, w = gray.shape
+    s = size
+    scale = float(np.exp(rng.uniform(np.log(0.7), np.log(1.4)))) if augment else 1.0
+    r = max(32, int(round(s / scale)))  # side of the region taken from the plan
+
+    # Centre: most of the time on a wall, door or window pixel, so crops are not mostly paper.
+    cy, cx = rng.integers(0, h), rng.integers(0, w)
+    if rng.random() < 0.7:
+        py, px = rng.integers(0, h, 96), rng.integers(0, w, 96)
+        hit = np.flatnonzero(labels[py, px] > 0)
+        if hit.size:
+            cy, cx = py[hit[0]], px[hit[0]]
+    y0 = int(cy - r // 2 + rng.integers(-r // 4, r // 4 + 1))
+    x0 = int(cx - r // 2 + rng.integers(-r // 4, r // 4 + 1))
+    y0 = min(max(y0, 0), max(h - r, 0)) if h >= r else -int(rng.integers(0, r - h + 1))
+    x0 = min(max(x0, 0), max(w - r, 0)) if w >= r else -int(rng.integers(0, r - w + 1))
+
+    img = np.full((r, r), 255, np.uint8)
+    lab = np.zeros((r, r), np.uint8)
+    sy0, sx0 = max(y0, 0), max(x0, 0)
+    sy1, sx1 = min(y0 + r, h), min(x0 + r, w)
+    img[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = gray[sy0:sy1, sx0:sx1]
+    lab[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = labels[sy0:sy1, sx0:sx1]
+    if r != s:
+        img = cv2.resize(img, (s, s), interpolation=cv2.INTER_AREA if r > s else cv2.INTER_LINEAR)
+        lab = cv2.resize(lab, (s, s), interpolation=cv2.INTER_NEAREST)
+
+    if augment:
+        k = int(rng.integers(0, 4))
+        img, lab = np.rot90(img, k), np.rot90(lab, k)
+        if rng.random() < 0.5:
+            img, lab = img[:, ::-1], lab[:, ::-1]
+        x = ink(np.ascontiguousarray(img))
+        # Scan-like variation: contrast, faded or heavy ink, blur, grain, a grey background.
+        x = x * rng.uniform(0.6, 1.15) + rng.uniform(-0.05, 0.12) * (rng.random() < 0.3)
+        if rng.random() < 0.25:
+            x = cv2.GaussianBlur(x, (0, 0), rng.uniform(0.4, 1.2))
+        if rng.random() < 0.3:
+            x = x + rng.normal(0, rng.uniform(0.01, 0.06), x.shape).astype(np.float32)
+        x = np.clip(x, 0, 1).astype(np.float32)
+        return x, np.ascontiguousarray(lab)
+    return ink(img), lab
+
+
 class TrainCrops:
     """Random training crops from whole plans: a few per plan load, with scale, rotation and scan-noise augmentation.
 
@@ -186,45 +232,4 @@ class TrainCrops:
         return np.stack(xs)[:, None], np.stack(ys).astype(np.int64)
 
     def _crop(self, gray: np.ndarray, labels: np.ndarray, rng: np.random.Generator):
-        h, w = gray.shape
-        s = self.size
-        scale = float(np.exp(rng.uniform(np.log(0.7), np.log(1.4)))) if self.augment else 1.0
-        r = max(32, int(round(s / scale)))  # side of the region taken from the plan
-
-        # Centre: most of the time on a wall, door or window pixel, so crops are not mostly paper.
-        cy, cx = rng.integers(0, h), rng.integers(0, w)
-        if rng.random() < 0.7:
-            py, px = rng.integers(0, h, 96), rng.integers(0, w, 96)
-            hit = np.flatnonzero(labels[py, px] > 0)
-            if hit.size:
-                cy, cx = py[hit[0]], px[hit[0]]
-        y0 = int(cy - r // 2 + rng.integers(-r // 4, r // 4 + 1))
-        x0 = int(cx - r // 2 + rng.integers(-r // 4, r // 4 + 1))
-        y0 = min(max(y0, 0), max(h - r, 0)) if h >= r else -int(rng.integers(0, r - h + 1))
-        x0 = min(max(x0, 0), max(w - r, 0)) if w >= r else -int(rng.integers(0, r - w + 1))
-
-        img = np.full((r, r), 255, np.uint8)
-        lab = np.zeros((r, r), np.uint8)
-        sy0, sx0 = max(y0, 0), max(x0, 0)
-        sy1, sx1 = min(y0 + r, h), min(x0 + r, w)
-        img[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = gray[sy0:sy1, sx0:sx1]
-        lab[sy0 - y0:sy1 - y0, sx0 - x0:sx1 - x0] = labels[sy0:sy1, sx0:sx1]
-        if r != s:
-            img = cv2.resize(img, (s, s), interpolation=cv2.INTER_AREA if r > s else cv2.INTER_LINEAR)
-            lab = cv2.resize(lab, (s, s), interpolation=cv2.INTER_NEAREST)
-
-        if self.augment:
-            k = int(rng.integers(0, 4))
-            img, lab = np.rot90(img, k), np.rot90(lab, k)
-            if rng.random() < 0.5:
-                img, lab = img[:, ::-1], lab[:, ::-1]
-            x = ink(np.ascontiguousarray(img))
-            # Scan-like variation: contrast, faded or heavy ink, blur, grain, a grey background.
-            x = x * rng.uniform(0.6, 1.15) + rng.uniform(-0.05, 0.12) * (rng.random() < 0.3)
-            if rng.random() < 0.25:
-                x = cv2.GaussianBlur(x, (0, 0), rng.uniform(0.4, 1.2))
-            if rng.random() < 0.3:
-                x = x + rng.normal(0, rng.uniform(0.01, 0.06), x.shape).astype(np.float32)
-            x = np.clip(x, 0, 1).astype(np.float32)
-            return x, np.ascontiguousarray(lab)
-        return ink(img), lab
+        return random_crop(gray, labels, rng, self.size, self.augment)

@@ -17,6 +17,7 @@ import {
   loadTestPlan,
   loadUploadedImage,
   planFromRun,
+  setMethod,
   useOpenCv,
   usePipelineRunner,
   usePipelineSession,
@@ -205,11 +206,19 @@ export const PipelinePage: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) => v
           stage && (
             <>
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-                <StageLegend id={stage.id} />
+                <StageLegend id={stage.id} method={run?.method} />
                 <span className="num text-xs text-muted">
                   {stage.image.width}×{stage.image.height} px · {formatMs(stage.timingMs)}
                 </span>
               </div>
+              {run?.method === 'model' && (stage.id === 3 || stage.id === 4) && (
+                <p className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-accent-soft px-3 py-2 text-[13px] leading-5 text-ink">
+                  In this run the trained model found the wall pixels, so this picture is its answer. The text beside it explains what the rules do here.
+                  <button type="button" onClick={() => setMethod('rules')} className="font-medium underline underline-offset-2">
+                    Run the rules instead
+                  </button>
+                </p>
+              )}
               <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
                 <Figures title="Settings" entries={Object.entries(stage.params)} />
                 <Figures title="In this run" entries={Object.entries(stage.counts).map(([k, v]) => [k, v.toLocaleString('en')])} />

@@ -44,7 +44,7 @@ Measured on the 400 test plans of [CubiCasa5k](https://zenodo.org/records/261354
 | Door and window IoU | not found | 74.5% |
 | Plans where it does better | | 395 of 400 |
 
-Image to plan uses the rules today; running the trained model in the browser is the next step (the ONNX export is ready and checked).
+Image to plan can use either: pick **Rules** or **Trained model** in its side panel. The model runs in your browser (on the graphics card through WebGPU, otherwise on the processor) and also finds doors and windows. Its weights are not in this repository, so copy them in once from a training run: `npm run model:install -- data/models/<run>` (they go to `public/models/`, which git ignores). `npm run check:model -- --run data/models/<run>` checks the browser's way of running it against the PyTorch predictions.
 
 > **Not 100% accurate.** FloorPlan3D is a student project, offered as it is and without any warranty. Detected walls can be missing, misplaced or extra, and the size of an uploaded plan is a guess. We have tried our best to make it good, and every result can be checked and fixed in Edit plan. Compare a model with the real plan before relying on its walls or measurements; you use it at your own risk.
 

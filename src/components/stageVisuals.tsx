@@ -4,10 +4,10 @@
  */
 
 import React, { useEffect, useRef } from 'react';
-import { HOUGH_COLORS, REMOVED_COLOR, WALL_COLORS, type RgbaImage, type StageId } from '../vision/pipeline';
+import { CLASS_COLORS, HOUGH_COLORS, REMOVED_COLOR, WALL_COLORS, type RgbaImage, type StageId, type WallMethod } from '../vision/pipeline';
 
 export const rgb = (c: [number, number, number]) => `rgb(${c.join(',')})`;
-export const formatMs = (ms: number) => `${ms < 10 ? ms.toFixed(1) : Math.round(ms)} ms`;
+export const formatMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms < 10 ? ms.toFixed(1) : Math.round(ms)} ms`);
 export const formatEntries = (entries: Record<string, string | number>) =>
   Object.entries(entries)
     .map(([key, value]) => `${key} ${value}`)
@@ -33,8 +33,10 @@ const Swatch: React.FC<{ color: string; label: string }> = ({ color, label }) =>
 );
 
 /** The colour key for the stages whose images are overlays (4, 6 and 7). */
-export const StageLegend: React.FC<{ id: StageId }> = ({ id }) => {
+export const StageLegend: React.FC<{ id: StageId; method?: WallMethod }> = ({ id, method = 'rules' }) => {
+  const openings: [string, string][] = method === 'model' ? [[rgb(CLASS_COLORS.door), 'Door'], [rgb(CLASS_COLORS.window), 'Window']] : [];
   const keys: Partial<Record<StageId, [string, string][]>> = {
+    ...(method === 'model' ? { 3: [[rgb(CLASS_COLORS.wall), 'Wall'], ...openings] as [string, string][] } : {}),
     4: [
       ['#ffffff', 'Kept'],
       [rgb(REMOVED_COLOR), 'Removed'],
@@ -48,6 +50,7 @@ export const StageLegend: React.FC<{ id: StageId }> = ({ id }) => {
       [rgb(WALL_COLORS.centerline), 'Wall centerline'],
       [rgb(WALL_COLORS.body), 'Wall thickness'],
       [rgb(WALL_COLORS.setAside), 'Set aside (slanted)'],
+      ...openings,
     ],
   };
   const entries = keys[id];

@@ -7,7 +7,7 @@
 
 import type { Opening2D, OpeningKind, Point2D, WallSegment2D } from '../types/floorplan';
 import { distance2D } from './geometryEngine';
-import { makeOpening } from './openings';
+import { makeOpening, openingSpan } from './openings';
 
 /** Wall ends closer than this (metres) are one junction. */
 export const JOIN_TOLERANCE = 0.02;
@@ -33,6 +33,19 @@ export function nearestWall(walls: WallSegment2D[], p: Point2D, maxDistance: num
     if (hit.distance <= maxDistance && (!best || hit.distance < best.distance)) best = { wall, t: hit.t, distance: hit.distance };
   }
   return best;
+}
+
+/** The door or window that covers the place `t` (0 to 1 along the wall), if any: a click there picks it instead of adding another on top. */
+export function openingAt(openings: Opening2D[], wall: WallSegment2D, t: number): Opening2D | null {
+  const length = Math.hypot(wall.end.x - wall.start.x, wall.end.z - wall.start.z);
+  const at = t * length;
+  return (
+    openings.find((o) => {
+      if (o.wallId !== wall.id) return false;
+      const { from, to } = openingSpan(o, length);
+      return at >= from && at <= to;
+    }) ?? null
+  );
 }
 
 export interface SnapOptions {

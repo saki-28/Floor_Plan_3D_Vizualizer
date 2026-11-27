@@ -351,3 +351,20 @@ test('[Openings] a wall without openings is the plain box; overlapping and overh
   assert.ok(!solidAt(boxes, [5.9, 2.0, 0]) && solidAt(boxes, [5.9, 0.5, 0]), 'the clipped window runs to the wall top');
   assert.ok(boxes.every((b) => b.max[0] <= 6 + 1e-9 && b.max[1] <= 2.8 + 1e-9), 'nothing sticks out of the wall');
 });
+
+test('an outside corner is filled where two walls meet, and nowhere else', async () => {
+  const { cornerFills, extrudePrism, validateWinding } = await import('./geometryEngine');
+  const wall = (id: string, x1: number, z1: number, x2: number, z2: number) => ({ id, start: { x: x1, z: z1 }, end: { x: x2, z: z2 }, thickness: 0.2, height: 2.8 });
+  const corner = cornerFills([wall('n', 0, 0, 4, 0), wall('e', 4, 0, 4, 3)]);
+  assert.equal(corner.length, 1);
+  const has = (x: number, z: number) => corner[0].some((p) => Math.abs(p.x - x) < 1e-9 && Math.abs(p.z - z) < 1e-9);
+  assert.ok(has(4, 0) && has(4, -0.1) && has(4.1, -0.1) && has(4.1, 0), 'the missing 0.1 m square at the outer corner');
+
+  assert.equal(cornerFills([wall('a', 0, 0, 2, 0), wall('b', 2, 0, 4, 0)]).length, 0, 'a straight join has no gap');
+  assert.equal(cornerFills([wall('a', 0, 0, 4, 0), wall('stem', 2, 0, 2, 3)]).length, 0, 'a wall ending on the side of another has no gap');
+  assert.equal(cornerFills([wall('a', 0, 0, 2, 0), wall('b', 2, 0, 4, 0), wall('stem', 2, 0, 2, 3)]).length, 0, 'three walls in a T leave no gap');
+
+  const prism = extrudePrism(corner[0], 0, 2.8);
+  assert.equal(prism.indices.length / 3, 12, 'top, bottom and four sides, two triangles each');
+  assert.equal(validateWinding(prism).passRate, 1, 'triangles are counter-clockwise from outside');
+});

@@ -230,8 +230,7 @@ export const AboutPage: React.FC = () => (
             </li>
             <li>
               <strong className="font-semibold">A person stays in the loop.</strong> Detection is never the last word: walls, doors and windows can be
-              fixed in Edit plan, and the 3D follows at once. Running the trained model in the browser, so detection and fixing happen in one place,
-              is the next step.
+              fixed in Edit plan, and the 3D follows at once. The trained model runs in the browser too, so detection and fixing happen in one place.
             </li>
           </ul>
         </Section>
@@ -249,8 +248,8 @@ export const AboutPage: React.FC = () => (
         <Section id="about-limits" title="What it cannot do yet">
           <ul className="flex list-disc flex-col gap-2 pl-5 marker:text-muted">
             <li>Walls must be horizontal or vertical. Slanted walls are set aside and curved walls are not handled.</li>
-            <li>Image to plan uses the rules, which do best on clean drawings with solid walls. The trained model is not in the app yet.</li>
-            <li>Doors and windows are not found in images yet; add them in Edit plan.</li>
+            <li>Image to plan finds walls with the rules or the trained model. The model learnt from CubiCasa5k drawings, so plans in other styles can do worse, and its weights file is not in the repository.</li>
+            <li>Only the trained model finds doors and windows, and only their width comes from the image; each gets a usual height.</li>
             <li>An uploaded image’s scale is guessed from its wall thickness, until there is a step to set it from a known length.</li>
             <li>Rooms and floors cannot be drawn yet, and a plan has one storey. Several storeys are planned.</li>
           </ul>

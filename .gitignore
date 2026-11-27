@@ -10,6 +10,11 @@ coverage/
 # Datasets, labels, evaluation results and trained models (root folder only, not src/data)
 /data/
 
+# The trained model's weights (CubiCasa5k is non-commercial; copied in with npm run model:install)
+# and the onnxruntime-web runtime files (copied from node_modules when the app starts or builds)
+/public/models/
+/public/ort/
+
 # Training: generated Kaggle bundle and Python caches
 training/kaggle/build/
 __pycache__/

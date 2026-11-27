@@ -53,7 +53,6 @@ export default function App() {
   const [wallHeight, setWallHeight] = useState<number>(2.8);
   const [wallThickness, setWallThickness] = useState<number>(0.22);
   const [showFurniture, setShowFurniture] = useState<boolean>(true);
-  const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => autosavePlan(plan), 400);
@@ -62,7 +61,6 @@ export default function App() {
 
   const openPlan = (next: FloorPlanDataset) => {
     dispatch({ type: 'replace', plan: next });
-    setSelectedWallId(null);
   };
 
   // Walls found in an image replace the open plan and are shown in 3D.
@@ -82,9 +80,10 @@ export default function App() {
       onChangeWallThickness={setWallThickness}
       showFurniture={showFurniture}
       onToggleFurniture={() => setShowFurniture((prev) => !prev)}
-      selectedWallId={selectedWallId}
-      onSelectWall={setSelectedWallId}
       theme={theme}
+      onEdit={(content) => dispatch({ type: 'edit', ...content })}
+      onUndo={() => dispatch({ type: 'undo' })}
+      onOpenEditor={() => navigate('edit')}
     />
   );
 

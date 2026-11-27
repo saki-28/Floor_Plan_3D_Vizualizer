@@ -8,8 +8,9 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { FloorPlanDataset, Segment2D } from '../types/floorplan';
 import { describeCvError, loadOpenCv, type CV } from './opencv';
-import { runPipeline, type PipelineRun, type RgbaImage } from './pipeline';
+import { runPipeline, workingImage, type ModelInput, type PipelineRun, type RgbaImage, type WallMethod } from './pipeline';
 import type { PipelineOptions } from './pipelineParams';
+import { describeBackend, runWallModel } from './wallModelClient';
 import { guessMetersPerPixel, wallsToPlan } from './wallsToPlan';
 
 export interface TestPlanEntry {
@@ -40,6 +41,12 @@ export interface PipelineSession {
   source: SourceImage | null;
   sourceError: string | null;
   overrides: Partial<PipelineOptions>;
+  /** How wall pixels are found: the hand-written rules, or the trained model. */
+  method: WallMethod;
+  /** While the trained model is looking at the image: how many of its tiles are done. */
+  modelProgress: { done: number; total: number } | null;
+  /** Why the trained model could not be used, when the rules took over from it. */
+  methodNotice: string | null;
   run: PipelineRun | null;
   runError: string | null;
   running: boolean;
@@ -55,12 +62,17 @@ let session: PipelineSession = {
   source: null,
   sourceError: null,
   overrides: {},
+  method: 'rules',
+  modelProgress: null,
+  methodNotice: null,
   run: null,
   runError: null,
   running: false,
 };
 /** The source and settings the current run (or failure) came from, so it is not repeated. */
-let ranOn: { source: SourceImage; overrides: Partial<PipelineOptions> } | null = null;
+let ranOn: { source: SourceImage; overrides: Partial<PipelineOptions>; method: WallMethod } | null = null;
+/** The trained model's answer for each image it has looked at: moving a slider must not run it again. */
+const modelAnswers = new WeakMap<SourceImage, ModelInput>();
 const listeners = new Set<() => void>();
 
 function update(patch: Partial<PipelineSession>) {
@@ -138,6 +150,10 @@ export function setOverrides(next: Partial<PipelineOptions>): void {
   update({ overrides: next });
 }
 
+export function setMethod(method: WallMethod): void {
+  if (method !== session.method) update({ method, methodNotice: null });
+}
+
 let manifest: Promise<void> | null = null;
 
 /** Fetches the test-plan list once, and opens the first plan if nothing is shown yet. */
@@ -177,25 +193,49 @@ export function useOpenCv(): { cv: CV | null; error: string | null } {
  * or the settings change, and reuses the last run when they have not (opening the other page).
  */
 export function usePipelineRunner(cv: CV | null): void {
-  const { source, overrides } = usePipelineSession();
+  const { source, overrides, method } = usePipelineSession();
   useEffect(() => {
     ensureTestPlans();
   }, []);
   useEffect(() => {
     if (!cv || !source) return;
-    if (ranOn && ranOn.source === source && ranOn.overrides === overrides) return;
+    if (ranOn && ranOn.source === source && ranOn.overrides === overrides && ranOn.method === method) return;
     update({ running: true });
+    let stopped = false;
+    const finish = (model?: ModelInput) => {
+      ranOn = { source, overrides, method };
+      try {
+        update({ run: runPipeline(cv, source.image, overrides, model), runError: null, running: false, modelProgress: null });
+      } catch (err) {
+        update({ run: null, runError: `The pipeline failed: ${describeCvError(cv, err)}`, running: false, modelProgress: null });
+      }
+    };
     // Debounces slider drags, and lets the busy state paint before the synchronous run.
     const timer = window.setTimeout(() => {
-      ranOn = { source, overrides };
-      try {
-        update({ run: runPipeline(cv, source.image, overrides), runError: null, running: false });
-      } catch (err) {
-        update({ run: null, runError: `The pipeline failed: ${describeCvError(cv, err)}`, running: false });
-      }
+      if (method === 'rules') return finish();
+      const known = modelAnswers.get(source);
+      if (known) return finish(known);
+      // The model looks at the image once, in the background; the answer is kept for this image.
+      runWallModel(workingImage(cv, source.image, overrides.maxLongSide), (done, total) => {
+        if (!stopped) update({ modelProgress: { done, total } });
+      })
+        .then((result) => {
+          const answer: ModelInput = { map: result.map, ms: result.ms, tiles: result.tiles, ranOn: describeBackend(result.backend, result.threads) };
+          modelAnswers.set(source, answer);
+          if (!stopped) finish(answer);
+        })
+        .catch((err) => {
+          if (stopped) return;
+          // The rules still work: go back to them and say why.
+          const why = err instanceof Error ? err.message : String(err);
+          update({ method: 'rules', modelProgress: null, running: false, methodNotice: `The trained model could not be used: ${why} The rules are used instead.` });
+        });
     }, 150);
-    return () => window.clearTimeout(timer);
-  }, [cv, source, overrides]);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [cv, source, overrides, method]);
 }
 
 /**
@@ -211,6 +251,11 @@ export function planFromRun(run: PipelineRun, source: SourceImage): { plan: Floo
     width: run.workingSize.width,
     height: run.workingSize.height,
     skewDeg: run.vector.skewDeg,
+    openings: run.openings,
+    description:
+      run.method === 'model'
+        ? 'Walls, doors and windows found in an image by the trained model.'
+        : 'Walls detected from an image by the OpenCV.js pipeline.',
   });
   return { plan, metersPerPixel, scaleKnown };
 }

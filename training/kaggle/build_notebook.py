@@ -63,8 +63,21 @@ def rules_scores() -> dict[str, float]:
     return {plan: rules for plan, rules, _model, _openings in rows}
 
 
-def build(minutes: float, steps: int, test_limit: int) -> dict:
+def cvcfp_baseline() -> dict:
+    """Run 2's and the rules' wall IoU on the scored CVC-FP plans (training/kaggle/cvcfp_baseline.json, scores only)."""
+    with open(os.path.join(HERE, 'cvcfp_baseline.json')) as f:
+        return json.load(f)
+
+
+LEARNING_RATES = {'unet': 2e-3, 'resunet34': 6e-4}  # a pretrained encoder wants a gentler start
+
+
+def build(minutes: float, steps: int, test_limit: int, arch: str = 'unet', resplan_share: float = 0.4) -> dict:
     rules = rules_scores()
+    baseline = cvcfp_baseline()
+    baseline_lines = ',\n'.join(
+        '    ' + ', '.join(f"{r['plan']!r}: ({r['rules']}, {r['run2']})" for r in baseline['rows'][i:i + 4]) for i in range(0, len(baseline['rows']), 4)
+    )
     rule_lines = ',\n'.join(
         '    ' + ', '.join(f'{plan!r}: {score}' for plan, score in list(rules.items())[i:i + 3]) for i in range(0, len(rules), 3)
     )
@@ -72,9 +85,9 @@ def build(minutes: float, steps: int, test_limit: int) -> dict:
         md('''
 # FloorPlan3D: walls, doors and windows from floor plan images
 
-This notebook trains the model behind FloorPlan3D's **Image to plan**: a U-Net that labels every pixel of a floor plan image as
+This notebook trains the model behind FloorPlan3D's **Image to plan**: a network that labels every pixel of a floor plan image as
 *background*, *wall*, *door* or *window*. It runs top to bottom on Kaggle's two T4 GPUs and leaves the trained model, its scores
-on the 400 test plans and an ONNX copy for the browser in its output.
+on the 400 CubiCasa5k test plans and on 96 plans from another dataset it never trains on, and an ONNX copy for the browser.
 
 | Section | What it shows |
 |---|---|
@@ -82,11 +95,13 @@ on the 400 test plans and an ONNX copy for the browser in its output.
 | 1. The data | CubiCasa5k: 5,000 plans in three kinds, split 4,200 / 400 / 400 |
 | 2. Labels | the hand-traced polygons drawn as one class map per plan, exactly as the app's scorer draws them |
 | 3. Training crops | 512 px crops with scale, rotation and scan-like noise |
-| 4. The model | a plain U-Net, 7.8 M parameters |
+| 3b. More drawing styles | ResPlan's 13,000 plans, drawn in a random style each time, mixed in |
+| 4. The model | a plain U-Net (7.8 M parameters) or a U-Net on a pretrained ResNet-34 (24 M) |
 | 5. The loss | cross-entropy plus soft Dice |
 | 6. Training | one process per GPU, half precision, a time-budgeted schedule |
 | 7. How training went | loss and validation scores over time |
 | 8. The test plans | wall IoU on all 400 test plans, against the hand-written rules of the app |
+| 8b. Plans it never saw | CVC-FP: another country's plans, against run 2 and the rules |
 | 9. Where it goes wrong | the best, a typical and the worst test plan, pixel by pixel |
 | 10. Export for the browser | the model as ONNX, checked against PyTorch |
 
@@ -95,7 +110,8 @@ notebook runs exactly the code its tests check.
 
 **Data and licence.** CubiCasa5k (Kalervo et al., *CubiCasa5K: A Dataset and an Improved Multi-Task Model for Floorplan Image
 Analysis*, SCIA 2019) is licensed CC BY-NC-SA 4.0. It, this notebook's outputs and the model trained here are for non-commercial
-use only.
+use only. ResPlan (2025) is CC BY 4.0 by its README (Kaggle lists CC BY-NC-SA 4.0); CVC-FP (de las Heras et al., IJDAR 2015) is
+CC BY-NC 4.0 and is only scored, never trained on.
 '''),
         md('''
 ## 0. Settings
@@ -111,22 +127,25 @@ ON_KAGGLE = os.path.isdir('/kaggle/input')
 QUICK = os.environ.get('FP3D_QUICK') == '1'
 
 RUN = dict(
-    width=32,          # U-Net width: 32 channels at full resolution, 7.8 M parameters
+    {f'arch={arch!r},':<19}# 'unet' (trained from scratch) or 'resunet34' (U-Net on an ImageNet-pretrained ResNet-34)
+    width=32,          # U-Net width: 32 channels at full resolution, 7.8 M parameters (unet only)
     crop=512,          # training crops are 512 × 512 px
     batch=8,           # crops per GPU per step
     per_plan=4,        # crops cut from each plan that is loaded
     minutes={minutes!r},       # training time budget; the schedule fits itself to it
     steps={steps!r},       # step budget; whichever runs out first ends training
-    lr=2e-3,           # peak learning rate (AdamW), after a 300-step warm-up, then cosine down to 2%
+    {f'lr={LEARNING_RATES[arch]!r},':<19}# peak learning rate (AdamW), after a 300-step warm-up, then cosine down to 2%
     val_plans=60,      # validation plans scored every val_every steps; the best checkpoint is kept
     val_every=3000,
     test_limit={test_limit!r},   # test plans scored at the end
     train_limit=0,     # 0 = all 4,200 training plans
     workers=2,         # data-loading processes per GPU
     log_every=200,
+    resplan_share={resplan_share!r},  # share of training items that are ResPlan plans drawn in a random style (0 = CubiCasa5k only)
 )
 if QUICK:
-    RUN.update(width=8, crop=128, minutes=1, steps=30, val_plans=2, val_every=15, test_limit=3, train_limit=12, workers=0, log_every=10, device='cpu')
+    RUN.update(width=8, crop=128, minutes=1, steps=30, val_plans=2, val_every=15, test_limit=3, train_limit=12, workers=0, log_every=10, device='cpu',
+               resplan_limit=40, heldout_limit=2, pretrained=int(ON_KAGGLE))  # off Kaggle, skip downloading ImageNet weights
 RUN
 '''),
         code('''
@@ -134,6 +153,7 @@ from __future__ import annotations
 
 import json
 import math
+import pickle
 import re
 import struct
 import subprocess
@@ -163,6 +183,14 @@ else:
     LABELS = os.environ.get('FP3D_LABELS', 'data/cubicasa5k-labels')
     OUT = os.environ.get('FP3D_OUT', 'data/models/notebook-run')
 os.makedirs(OUT, exist_ok=True)
+if ON_KAGGLE:
+    RESPLAN = next((os.path.join(d, 'ResPlan.pkl') for d, _, files in os.walk('/kaggle/input') if 'ResPlan.pkl' in files), '')
+    CVCFP = next((os.path.dirname(d) for d, _, files in os.walk('/kaggle/input') if os.path.basename(d) == 'X' and '1.png' in files), '')
+else:
+    RESPLAN = os.environ.get('FP3D_RESPLAN', '')
+    CVCFP = os.environ.get('FP3D_CVCFP', 'data/cvc-fp' if os.path.isdir('data/cvc-fp/X') else '')
+if not RUN['resplan_share']:
+    RESPLAN = ''
 
 
 def gpu_names() -> list[str]:
@@ -179,7 +207,7 @@ GPUS = gpu_names()
 WORLD = len(GPUS) or int(os.environ.get('FP3D_WORLD', 1))  # one training process per GPU
 print(f'Python {sys.version.split()[0]}, PyTorch {torch.__version__}, OpenCV {cv2.__version__}')
 print(f'GPUs: {GPUS or "none"}; {os.cpu_count()} CPU cores; {WORLD} training process(es)')
-print(f'data {DATA}\\nlabels {LABELS}\\noutput {OUT}')
+print(f'data {DATA}\\nlabels {LABELS}\\noutput {OUT}\\nResPlan {RESPLAN or "not used"}\\nCVC-FP {CVCFP or "not used"}')
 '''),
         md('''
 ## 1. The data
@@ -288,7 +316,7 @@ them centred on a wall, door or window pixel so they are not mostly empty paper.
 multiple of 90°, maybe mirrored, then made to look like another scan: contrast, faded or heavy ink, blur, grain and a grey
 background. The input is *ink*: 0 for paper and 1 for black, so the zero padding at the edges reads as paper.
 '''),
-        code(extract('cubicasa.py', 'ink', 'TrainCrops')),
+        code(extract('cubicasa.py', 'ink', 'random_crop', 'TrainCrops')),
         code('''
 preview = TrainCrops(DATA, LABELS, splits['train'][:200], size=RUN['crop'], per_plan=4)
 crops = [preview[i] for i in (0, 1)]
@@ -306,24 +334,75 @@ plt.tight_layout()
 plt.show()
 '''),
         md('''
+## 3b. More drawing styles: ResPlan
+
+CubiCasa5k is one country's drawings. On plans it never saw (section 8b) a model trained on it alone misses walls drawn in styles
+CubiCasa5k rarely uses: hollow double-line walls, hatching, grey fills, other door and window symbols. ResPlan (2025) gives the
+walls, doors, windows and rooms of 17,000 plans as polygons, but no images. So every time one of its 13,053 training plans is
+used, `render_plan` draws it in a random style: solid, outlined, thick-outlined, hatched or grey walls; door swings, door leaves
+or bare gaps; windows as two or three glass lines, a box or a grey fill; tinted or tiled rooms, room names and areas, furniture,
+stairs, railings and dimension lines, and now and then a slightly turned page. Walls are drawn 4 to 18 px thick, the range plans
+have at the size the app works at. The class map is drawn from the same polygons, with CubiCasa5k's conventions (doors and windows
+fill their gap in the wall), so the labels are exact.
+
+`MixedCrops` makes `resplan_share` of the training items such drawn plans, cut into crops exactly as CubiCasa5k plans are.
+'''),
+        code(extract('resplan.py', 'ROOM_NAMES', 'ROOM_KEYS', '_polygons', '_area_and_length', 'compact_plan', '_LOADED', 'load_resplan', '_px',
+                     '_fill', '_rect', '_box', '_style', 'render_plan', 'MixedCrops')),
+        code('''
+if RESPLAN:
+    resplan_plans = load_resplan(RESPLAN, limit=RUN.get('resplan_limit', 0))  # read once here; the training processes share it
+    rng = np.random.default_rng(3)
+    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+    for col in range(4):
+        gray, labels = render_plan(resplan_plans[int(rng.integers(len(resplan_plans)))], rng)
+        axes[0, col].imshow(gray, cmap='gray', vmin=0, vmax=255)
+        axes[1, col].imshow(COLOURS[labels])
+    for ax in axes.ravel():
+        ax.axis('off')
+    axes[0, 0].set_title('ResPlan plans, each drawn in a random style', loc='left')
+    axes[1, 0].set_title('their class maps', loc='left')
+    plt.tight_layout()
+    fig.savefig(os.path.join(OUT, 'resplan_samples.png'), dpi=80)
+    plt.show()
+    walls = np.array([p['thickness'] for p in resplan_plans])
+    print(f'{len(resplan_plans)} plans; typical wall thickness {np.median(walls):.3g} (in ResPlan units), '
+          f'{np.mean([len(p["door"]) for p in resplan_plans]):.1f} doors and {np.mean([len(p["window"]) for p in resplan_plans]):.1f} windows a plan')
+else:
+    print('ResPlan is not attached (or resplan_share is 0): training on CubiCasa5k alone')
+'''),
+        md('''
 ## 4. The model
 
-A plain U-Net (Ronneberger et al., 2015): five levels of two 3 × 3 convolutions with batch norm, max-pooling on the way down,
-transposed convolutions and skip connections on the way up, and a 1 × 1 convolution to four class scores per pixel. At width 32 the
-levels have 32, 64, 128, 256 and 512 channels: 7.8 M parameters.
+`RUN['arch']` picks one of two:
+
+* **`unet`**: a plain U-Net (Ronneberger et al., 2015) trained from scratch: five levels of two 3 × 3 convolutions with batch norm,
+  max-pooling on the way down, transposed convolutions and skip connections on the way up, and a 1 × 1 convolution to four class
+  scores per pixel. At width 32 the levels have 32, 64, 128, 256 and 512 channels: 7.8 M parameters.
+* **`resunet34`**: a U-Net decoder on a ResNet-34 encoder (He et al., 2016) that starts from ImageNet weights, with concurrent
+  spatial and channel squeeze-and-excitation (scSE, Roy et al., 2018) after every decoder stage and a small full-resolution stem
+  as the last skip, so thin walls keep sharp edges: 24 M parameters. Recent floor-plan work (MitUNet, 2025) finds pretrained
+  encoders with a U-Net decoder and attention generalise better than a U-Net from scratch; a larger transformer encoder would be
+  too heavy to download in a browser.
 
 Whole plans are predicted in overlapping 1,024 px tiles (`predict_plan`), keeping only the middle of each tile, so a plan of any
 size fits in memory and tile edges never show.
 '''),
-        code(extract('model.py', '_block', 'UNet', 'predict_plan')),
+        code(extract('model.py', '_block', 'UNet', '_BasicBlock', 'ResNet34Encoder', 'RESNET34_IMAGENET', 'load_imagenet_weights', 'SCSE', '_UpBlock',
+                     'ResUNet34', 'build_model', 'predict_plan')),
         code('''
 # Built here only to count its parameters. Running it waits for the training processes: they are forked from this notebook,
 # and a forked process should not inherit a CPU thread pool (or a GPU context) that PyTorch has already started.
-net = UNet(RUN['width'])
+net = build_model({'arch': 'unet', 'width': RUN['width']} if RUN['arch'] == 'unet' else {'arch': RUN['arch']})
 s = RUN['crop']
-display(pd.DataFrame({'channels': [RUN['width'] * 2 ** i for i in range(5)], 'resolution of a crop': [f'{s >> i} × {s >> i}' for i in range(5)]},
-                     index=pd.Index(range(1, 6), name='level')))
-print(f'{sum(p.numel() for p in net.parameters()) / 1e6:.2f} M parameters; output: 4 class scores for every input pixel')
+if RUN['arch'] == 'unet':
+    display(pd.DataFrame({'channels': [RUN['width'] * 2 ** i for i in range(5)], 'resolution of a crop': [f'{s >> i} × {s >> i}' for i in range(5)]},
+                         index=pd.Index(range(1, 6), name='level')))
+elif RUN.get('pretrained', 1):
+    # Fetch the ImageNet weights once, here, so the training processes find them in the cache.
+    load_imagenet_weights(net.encoder, torch.hub.load_state_dict_from_url(RESNET34_IMAGENET, map_location='cpu', progress=False))
+    print('ImageNet weights for the ResNet-34 encoder fetched and checked')
+print(f'{RUN["arch"]}: {sum(p.numel() for p in net.parameters()) / 1e6:.2f} M parameters; output: 4 class scores for every input pixel')
 del net
 '''),
         md(r'''
@@ -342,6 +421,16 @@ Scores are reported as IoU: $|F \cap T| \,/\, |F \cup T|$ for the pixels found $
 '''),
         code(extract('train.py', 'collate', 'dice_loss', 'iou', 'plan_scores')),
         md('''
+## 5b. Plans it never trains on
+
+CVC-FP (de las Heras et al., 2015) holds 121 scanned plans of another country in four styles, with walls, doors and windows
+labelled. None is ever trained on or used to choose a checkpoint; they are scored once at the end, the way the browser predicts:
+shrunk to a longest side of 1,600 px, in 512 px tiles. The Kaggle copy's label pictures are shifted against their scans, so each
+is lined up with its scan's ink first. The same 96 plans as the app's baseline are scored (25 are left out: labels covering only
+part of the page, unlabelled walls, or scans the app cannot read).
+'''),
+        code(extract('heldout.py', 'CVCFP_COLOURS', 'CVCFP_EXCLUDED', 'cvcfp_plans', '_best_shift', '_shifted', 'cvcfp_truth', 'score_cvcfp')),
+        md('''
 ## 6. Training
 
 `train_worker` runs once per GPU. With two T4s the two processes train one model together (PyTorch DistributedDataParallel): each
@@ -355,7 +444,7 @@ on the validation plans and the best checkpoint is kept. At the end that checkpo
 '''),
         code(extract('train.py', 'TrainConfig', 'train_worker')),
         code('''
-cfg = TrainConfig(data=DATA, labels=LABELS, out=OUT, **RUN)
+cfg = TrainConfig(data=DATA, labels=LABELS, out=OUT, resplan=RESPLAN, heldout=CVCFP, **RUN)
 for name in ('log.txt', 'history.json'):  # a fresh history for this run
     if os.path.exists(os.path.join(OUT, name)):
         os.remove(os.path.join(OUT, name))
@@ -444,6 +533,48 @@ for ax in (a, b):
 plt.show()
 '''),
         md('''
+## 8b. Plans it never saw: CVC-FP
+
+The real test of whether more drawing styles help. Run 2 is the CubiCasa5k-only U-Net the app uses today; its scores and the
+rules' were measured on these same 96 plans, the same way.
+'''),
+        code(f'''
+# Wall IoU of the rules and of run 2 on each scored CVC-FP plan: (rules, run 2), from training/kaggle/cvcfp_baseline.json.
+CVCFP_BASELINE = {{
+{baseline_lines},
+}}
+'''),
+        code('''
+path = os.path.join(OUT, 'heldout_cvcfp.json')
+if os.path.exists(path):
+    held = json.load(open(path))
+    h = pd.DataFrame(held['rows']).set_index('plan')
+    h['rules'] = [CVCFP_BASELINE.get(p, (np.nan, np.nan))[0] for p in h.index]
+    h['run2'] = [CVCFP_BASELINE.get(p, (np.nan, np.nan))[1] for p in h.index]
+    k = held['summary']
+    display(Markdown(
+        f"| on {k['plans']} CVC-FP plans | this run | run 2 (CubiCasa5k only) | rules |\\n|---|---|---|---|\\n"
+        f"| wall IoU (mean) | **{k['iou']:.1%}** | {h['run2'].mean():.1%} | {h['rules'].mean():.1%} |\\n"
+        f"| wall IoU (median) | {k['median_iou']:.1%} | {h['run2'].median():.1%} | {h['rules'].median():.1%} |\\n"
+        f"| precision / recall | {k['precision']:.1%} / {k['recall']:.1%} | | |\\n"
+        f"| door and window IoU | {k['openings_iou'] or 0:.1%} | 56.0% | not found |\\n"
+        f"| better than run 2 on | {(h['iou'] > h['run2']).sum()} of {h['run2'].notna().sum()} plans | | |"
+    ))
+    fig, ax = plt.subplots(figsize=(6.5, 6))
+    ax.scatter(h['run2'], h['iou'], s=16, color='#2f70bb', alpha=0.7)
+    ax.plot([0, 1], [0, 1], color='grey', lw=1)
+    ax.set_xlim(0.3, 1)
+    ax.set_ylim(0.3, 1)
+    ax.set_xlabel('run 2 (CubiCasa5k only), wall IoU')
+    ax.set_ylabel('this run, wall IoU')
+    ax.set_title('each dot is one CVC-FP plan; above the line this run is better')
+    ax.grid(alpha=0.25)
+    ax.spines[['top', 'right']].set_visible(False)
+    plt.show()
+else:
+    print('CVC-FP was not attached, so no held-out score')
+'''),
+        md('''
 ## 9. Where it goes wrong
 
 The best, a typical (median) and the worst test plan. Teal is wall found, red is wall found where there is none, amber is wall missed.
@@ -478,7 +609,7 @@ The export is checked against PyTorch on a tile of a test plan. `model_card.json
 '''),
         code('''
 checkpoint = torch.load(os.path.join(OUT, 'model_best.pt'), map_location='cpu')
-export_net = UNet(**checkpoint['config']).eval()
+export_net = build_model(checkpoint['config']).eval()
 export_net.load_state_dict(checkpoint['state'])
 onnx_path = os.path.join(OUT, 'floorplan3d_walls.onnx')
 dummy = torch.zeros(1, 1, 512, 512)
@@ -511,10 +642,12 @@ if exported:
         print('onnxruntime is not installed here; check the export with training/check_onnx.py on a machine that has it')
 
 card = {
-    'model': 'FloorPlan3D wall model (U-Net)', 'classes': list(CLASSES), 'config': checkpoint['config'], 'checkpoint_step': checkpoint['step'],
+    'model': f'FloorPlan3D wall model ({checkpoint["config"].get("arch", "unet")})', 'classes': list(CLASSES), 'config': checkpoint['config'],
+    'checkpoint_step': checkpoint['step'], 'trained_on': ['CubiCasa5k'] + (['ResPlan, drawn in random styles'] if RESPLAN else []),
     'input': 'ink = 1 - gray / 255 (0 paper, 1 black), shape [1, 1, H, W] float32, H and W multiples of 32',
-    'tiling': {'tile': 1024, 'margin': 96}, 'onnx': os.path.basename(onnx_path) if exported else None,
+    'tiling': {'tile': 512, 'margin': 96}, 'onnx': os.path.basename(onnx_path) if exported else None,
     'validation': checkpoint['val'], 'test': results['summary'],
+    'heldout_cvcfp': json.load(open(os.path.join(OUT, 'heldout_cvcfp.json')))['summary'] if os.path.exists(os.path.join(OUT, 'heldout_cvcfp.json')) else None,
     'data': 'CubiCasa5k (CC BY-NC-SA 4.0): non-commercial use only',
 }
 json.dump(card, open(os.path.join(OUT, 'model_card.json'), 'w'), indent=1)
@@ -548,13 +681,16 @@ def main() -> None:
     ap.add_argument('--minutes', type=float, default=180)
     ap.add_argument('--steps', type=int, default=60000)
     ap.add_argument('--test-limit', type=int, default=400)
+    ap.add_argument('--arch', default='unet', choices=sorted(LEARNING_RATES))
+    ap.add_argument('--resplan-share', type=float, default=0.4)
+    ap.add_argument('--title', default='FloorPlan3D walls notebook')
     ap.add_argument('--notebook', default=NOTEBOOK, help='where to write the notebook')
     ap.add_argument('--kaggle-dir', default=os.path.join(HERE, 'build', 'notebook'), help='folder to push to Kaggle')
     ap.add_argument('--slug', default='floorplan3d-walls-notebook')
     ap.add_argument('--owner', default='jeswintobias')
     args = ap.parse_args()
 
-    notebook = build(args.minutes if args.minutes % 1 else int(args.minutes), args.steps, args.test_limit)
+    notebook = build(args.minutes if args.minutes % 1 else int(args.minutes), args.steps, args.test_limit, args.arch, args.resplan_share)
     for i, cell in enumerate(notebook['cells']):
         cell['id'] = f'cell-{i:02d}'
     text = json.dumps(notebook, indent=1, ensure_ascii=False) + '\n'
@@ -567,16 +703,16 @@ def main() -> None:
         f.write(text)
     meta = {
         'id': f'{args.owner}/{args.slug}',
-        'title': 'FloorPlan3D walls notebook',
+        'title': args.title,
         'code_file': code_file,
         'language': 'python',
         'kernel_type': 'notebook',
         'is_private': True,
         'enable_gpu': True,
         'enable_tpu': False,
-        'enable_internet': False,
+        'enable_internet': True,  # the ImageNet weights of the ResNet-34 encoder
         'machine_shape': 'NvidiaTeslaT4',
-        'dataset_sources': ['qmarva/cubicasa5k'],
+        'dataset_sources': ['qmarva/cubicasa5k', 'resplan/resplan', 'asutoshprad/floor-plan-dataset'],
         'competition_sources': [],
         'kernel_sources': [],
         'model_sources': [],

@@ -184,8 +184,8 @@ export const ResultsPage: React.FC = () => {
             with theirs.
           </li>
           <li>
-            The trained model is not in the app yet: Image to plan still uses the rules. CubiCasa5k may only be used for non-commercial work, and so may the
-            model. Times per plan were measured on different hardware ({rules.msPerPlan} ms CPU, {model.msPerPlan} ms GPU).
+            Image to plan can use the trained model when its weights file is present; the file is not in the repository. CubiCasa5k may only be used for
+            non-commercial work, and so may the model. Times per plan were measured on different hardware ({rules.msPerPlan} ms CPU, {model.msPerPlan} ms GPU).
           </li>
         </ul>
         <div className="mt-4 flex flex-wrap gap-2">

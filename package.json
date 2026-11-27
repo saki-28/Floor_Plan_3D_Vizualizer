@@ -12,7 +12,10 @@
     "test": "tsx --test \"src/**/*.test.ts\"",
     "gen:test-plans": "tsx scripts/generate-test-plans.ts",
     "eval:cubicasa": "tsx scripts/evaluate-cubicasa.ts",
-    "export:results": "tsx scripts/export-results.ts"
+    "export:results": "tsx scripts/export-results.ts",
+    "check:model": "tsx scripts/check-wall-model.ts",
+    "model:install": "node scripts/install-model.mjs",
+    "eval:heldout": "tsx scripts/evaluate-heldout.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -24,6 +27,7 @@
     "katex": "^0.19.1",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "onnxruntime-web": "^1.31.1",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^8.3.0"
