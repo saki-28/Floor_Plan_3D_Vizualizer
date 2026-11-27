@@ -3,6 +3,10 @@
  * Runs in the browser and in Node. Every stage records its output image,
  * parameters, counts and timing so the UI can show what each step did.
  * Stage 7 (raw segments to walls) lives in vectorize.ts.
+ *
+ * Step 3 decides which pixels are wall, and there are two ways to do it: the rules (an Otsu
+ * threshold, tidied by step 4) or the trained model (wallModel.ts), whose answer is passed in.
+ * Steps 5 to 7 are the same either way; the model also finds doors and windows.
  */
 
 import type { Mat } from '@techstark/opencv-js';
@@ -21,6 +25,7 @@ import {
   type SegmentStats,
 } from './pipelineParams';
 import { defaultVectorizeOptions, vectorizeWalls, type VectorizeResult } from './vectorize';
+import { CLASS_DOOR, CLASS_WALL, CLASS_WINDOW, countClasses, openingsFromClasses, wallBandMask, type ClassMap, type DetectedOpening } from './wallModel';
 
 export interface RgbaImage {
   width: number;
@@ -39,7 +44,22 @@ export interface StageResult {
   image: RgbaImage;
 }
 
+/** The trained model's answer for an image at working size, with how it was run. */
+export interface ModelInput {
+  map: ClassMap;
+  ms: number;
+  tiles: number;
+  /** Where it ran, in words ("on the graphics card"). */
+  ranOn: string;
+}
+
+export type WallMethod = 'rules' | 'model';
+
 export interface PipelineRun {
+  /** How step 3 found the wall pixels. */
+  method: WallMethod;
+  /** Doors and windows on the walls (the trained model finds them; the rules do not). */
+  openings: DetectedOpening[];
   stages: StageResult[];
   /** Raw HoughLinesP output, in working-resolution pixels. */
   rawSegments: Segment2D[];
@@ -67,6 +87,13 @@ export const HOUGH_COLORS: Record<Orientation, [number, number, number]> = {
 };
 export const REMOVED_COLOR: [number, number, number] = [229, 86, 111];
 /** Stage 7 overlay: a wall's body, its centerline, and raw segments set aside as slanted. */
+/** The trained model's classes as drawn in step 3 and on the walls of step 7. */
+export const CLASS_COLORS = {
+  wall: [236, 238, 240] as [number, number, number],
+  door: [224, 138, 18] as [number, number, number],
+  window: [57, 135, 229] as [number, number, number],
+};
+
 export const WALL_COLORS = {
   body: [36, 82, 94] as [number, number, number],
   centerline: [95, 180, 200] as [number, number, number],
@@ -108,10 +135,38 @@ function removalOverlay(binary: Mat, cleaned: Mat): RgbaImage {
   return { width: binary.cols, height: binary.rows, data: out };
 }
 
+/** Step 1 on its own: the image at the size the pipeline works at (the trained model is given this). */
+export function workingImage(cv: CV, input: RgbaImage, maxLongSide = MAX_LONG_SIDE): RgbaImage {
+  const fit = fitWithin(input.width, input.height, maxLongSide);
+  if (fit.scale >= 1) return input;
+  const src = cv.matFromImageData(input);
+  const resized = new cv.Mat();
+  try {
+    cv.resize(src, resized, new cv.Size(fit.width, fit.height), 0, 0, cv.INTER_AREA);
+    return { width: resized.cols, height: resized.rows, data: new Uint8ClampedArray(resized.data) };
+  } finally {
+    src.delete();
+    resized.delete();
+  }
+}
+
+/** Step 3 picture for the trained model: walls light, doors amber, windows blue. */
+function classImage(map: ClassMap): RgbaImage {
+  const out = new Uint8ClampedArray(map.classes.length * 4);
+  for (let p = 0; p < map.classes.length; p++) {
+    const c = map.classes[p];
+    const color = c === CLASS_WALL ? CLASS_COLORS.wall : c === CLASS_DOOR ? CLASS_COLORS.door : c === CLASS_WINDOW ? CLASS_COLORS.window : null;
+    if (color) [out[p * 4], out[p * 4 + 1], out[p * 4 + 2]] = color;
+    out[p * 4 + 3] = 255;
+  }
+  return { width: map.width, height: map.height, data: out };
+}
+
 export function runPipeline(
   cv: CV,
   input: RgbaImage,
   overrides: Partial<PipelineOptions> = {},
+  model?: ModelInput,
 ): PipelineRun {
   const mats: { delete(): void }[] = [];
   const keep = <T extends { delete(): void }>(m: T): T => {
@@ -133,7 +188,11 @@ export function runPipeline(
     });
     const width = rgba.cols;
     const height = rgba.rows;
-    const opts = resolveOptions(width, height, overrides);
+    // The model's walls are solid already, so step 4 has no outlines to fill.
+    const opts = model ? { ...resolveOptions(width, height, overrides), fillKernel: 1 } : resolveOptions(width, height, overrides);
+    if (model && (model.map.width !== width || model.map.height !== height)) {
+      throw new Error(`The model looked at ${model.map.width}×${model.map.height} pixels, but the image is ${width}×${height}.`);
+    }
     stages.push({
       id: 1,
       title: 'Load & resize',
@@ -164,25 +223,53 @@ export function runPipeline(
       image: toRgba(cv, stage2.equalized),
     });
 
-    // Stage 3: inverted Otsu, so ink becomes white (255) and paper black.
-    const [stage3, ms3] = timed(() => {
-      const binary = keep(new cv.Mat());
-      const otsu = cv.threshold(stage2.equalized, binary, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
-      return { binary, otsu };
-    });
+    // Stage 3: which pixels are wall. The rules use an inverted Otsu threshold, so ink becomes
+    // white (255) and paper black. The trained model's answer comes in ready: its walls, with the
+    // doors and windows cut into them, are the white pixels (a wall then runs on through its openings).
+    const [stage3, ms3] = model
+      ? ([
+          (() => {
+            const binary = keep(new cv.Mat(height, width, cv.CV_8UC1));
+            binary.data.set(wallBandMask(model.map));
+            return { binary, otsu: 128 };
+          })(),
+          model.ms,
+        ] as const)
+      : timed(() => {
+          const binary = keep(new cv.Mat());
+          const otsu = cv.threshold(stage2.equalized, binary, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
+          return { binary, otsu };
+        });
     const foreground = cv.countNonZero(stage3.binary);
-    stages.push({
-      id: 3,
-      title: 'Otsu threshold',
-      params: { Mode: 'BINARY_INV | OTSU' },
-      counts: {
-        'Otsu threshold': Math.round(stage3.otsu),
-        'Ink pixels': foreground,
-        'Ink %': Math.round((foreground / (width * height)) * 1000) / 10,
-      },
-      timingMs: ms3,
-      image: toRgba(cv, stage3.binary),
-    });
+    if (model) {
+      const found = countClasses(model.map);
+      stages.push({
+        id: 3,
+        title: 'Trained model',
+        params: { Model: 'U-Net, 7.8 M parameters', Ran: model.ranOn, Tiles: `${model.tiles} of 512 px` },
+        counts: {
+          'Wall pixels': found.wall,
+          'Door pixels': found.door,
+          'Window pixels': found.window,
+          'Wall %': Math.round((found.wall / (width * height)) * 1000) / 10,
+        },
+        timingMs: ms3,
+        image: classImage(model.map),
+      });
+    } else {
+      stages.push({
+        id: 3,
+        title: 'Otsu threshold',
+        params: { Mode: 'BINARY_INV | OTSU' },
+        counts: {
+          'Otsu threshold': Math.round(stage3.otsu),
+          'Ink pixels': foreground,
+          'Ink %': Math.round((foreground / (width * height)) * 1000) / 10,
+        },
+        timingMs: ms3,
+        image: toRgba(cv, stage3.binary),
+      });
+    }
 
     // Stage 4: opening removes thin strokes; the blob filter drops what is too
     // small (area, extent) to be a wall, and short blobs drawn with much
@@ -414,6 +501,15 @@ export function runPipeline(
       const b = new cv.Point(w.bx, w.by);
       cv.line(wallOverlay, a, b, toScalar(WALL_COLORS.body), Math.max(1, Math.round(w.thickness)), cv.LINE_8);
     }
+    // Doors and windows (trained model only), drawn across the wall they were placed on.
+    const openings = model ? openingsFromClasses(model.map, vector.walls) : [];
+    for (const o of openings) {
+      const w = vector.walls[o.wall];
+      const length = Math.hypot(w.bx - w.ax, w.by - w.ay);
+      const at = (s: number) => new cv.Point(w.ax + ((w.bx - w.ax) * s) / length, w.ay + ((w.by - w.ay) * s) / length);
+      const centre = o.position * length;
+      cv.line(wallOverlay, at(centre - o.widthPx / 2), at(centre + o.widthPx / 2), toScalar(CLASS_COLORS[o.kind]), Math.max(1, Math.round(w.thickness)), cv.LINE_8);
+    }
     for (const w of vector.walls) {
       const a = new cv.Point(w.ax, w.ay);
       const b = new cv.Point(w.bx, w.by);
@@ -440,12 +536,15 @@ export function runPipeline(
         'Dropped as stray pieces': vector.counts.droppedStray,
         Walls: vector.counts.walls,
         'Junctions closed': vector.counts.junctions,
+        ...(model ? { Doors: openings.filter((o) => o.kind === 'door').length, Windows: openings.filter((o) => o.kind === 'window').length } : {}),
       },
       timingMs: ms7,
       image: toRgba(cv, wallOverlay),
     });
 
     return {
+      method: model ? 'model' : 'rules',
+      openings,
       stages,
       rawSegments,
       walls: vector.walls,

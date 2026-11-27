@@ -5,8 +5,10 @@
  * A scan's measured skew can be passed to straighten the building before it is mapped.
  */
 
-import type { FloorPlanDataset, Segment2D } from '../types/floorplan';
+import type { FloorPlanDataset, Opening2D, Segment2D } from '../types/floorplan';
 import { imageToWorld } from '../utils/geometryEngine';
+import { OPENING_DEFAULTS } from '../utils/openings';
+import type { DetectedOpening } from './wallModel';
 
 /** Typical wall thickness, used to guess the scale of an image nobody has calibrated. */
 export const ASSUMED_WALL_THICKNESS_M = 0.2;
@@ -27,7 +29,9 @@ export function wallsToPlan(
     height,
     height3d = 2.8,
     skewDeg = 0,
-  }: { name: string; width: number; height: number; height3d?: number; skewDeg?: number },
+    openings = [],
+    description = 'Walls detected from an image by the OpenCV.js pipeline.',
+  }: { name: string; width: number; height: number; height3d?: number; skewDeg?: number; openings?: DetectedOpening[]; description?: string },
 ): FloorPlanDataset {
   if (skewDeg !== 0) {
     // Rotate by −skew about the image centre so the walls are axis-aligned in 3D.
@@ -57,6 +61,21 @@ export function wallsToPlan(
     height: height3d,
   }));
 
+  // Doors and windows keep their place along their wall; an image shows their width, not their
+  // height, so each gets the usual height for its kind (and a window the usual sill).
+  const counts = { door: 0, window: 0 };
+  const worldOpenings: Opening2D[] = openings
+    .filter((o) => worldWalls[o.wall])
+    .map((o) => ({
+      id: `detected-${o.kind}-${++counts[o.kind]}`,
+      kind: o.kind,
+      wallId: worldWalls[o.wall].id,
+      position: Math.min(1, Math.max(0, o.position)),
+      width: Math.round(o.widthPx * metersPerPixel * 100) / 100,
+      sill: OPENING_DEFAULTS[o.kind].sill,
+      height: OPENING_DEFAULTS[o.kind].height,
+    }));
+
   const corners = walls.length
     ? [
         imageToWorld(Math.min(...us), Math.min(...vs), config),
@@ -70,7 +89,7 @@ export function wallsToPlan(
   return {
     id: 'detected',
     name,
-    description: 'Walls detected from an image by the OpenCV.js pipeline.',
+    description,
     difficulty: 'Complex (Noisy Scan)',
     widthPx: width,
     heightPx: height,
@@ -78,7 +97,7 @@ export function wallsToPlan(
     u0,
     v0,
     walls: worldWalls,
-    openings: [],
+    openings: worldOpenings,
     rooms: corners.length
       ? [{ id: 'detected-floor', name: 'Floor', color: '#9aa4a9', corners, areaSqM: Math.round(floorArea * 10) / 10, type: 'living' }]
       : [],

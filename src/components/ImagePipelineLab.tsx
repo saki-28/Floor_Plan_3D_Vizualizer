@@ -1,6 +1,7 @@
 /**
  * Image to plan: runs the real OpenCV.js pipeline (stages 1–7) on a synthetic
- * test plan or an uploaded image. The selected stage (the walls, by default) gets
+ * test plan or an uploaded image. Wall pixels are found by the hand-written rules or by the
+ * trained model (which also finds doors and windows), whichever is chosen in the side panel. The selected stage (the walls, by default) gets
  * the big view under a strip of all seven; the side panel holds the summary, the
  * score against the real walls when the image is a test plan, and the settings.
  * The detected walls can be opened in the 3D viewer. The run is the one How it works → Pipeline
@@ -10,20 +11,24 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Box, ChevronDown, ImageUp, Loader2, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import type { FloorPlanDataset } from '../types/floorplan';
-import type { StageId } from '../vision/pipeline';
+import { hrefOf } from '../router';
+import type { StageId, WallMethod } from '../vision/pipeline';
 import type { TunableKey } from '../vision/pipelineParams';
 import {
   loadTestPlan,
   loadUploadedImage,
   planFromRun,
+  setMethod,
   setOverrides,
   useOpenCv,
   usePipelineRunner,
   usePipelineSession,
 } from '../vision/pipelineSession';
 import { scoreWalls } from '../vision/scoreWalls';
+import { solidWallPieces } from '../vision/wallModel';
+import { useWallModel } from '../vision/wallModelClient';
 import { StageCanvas, StageLegend, formatEntries, formatMs } from './stageVisuals';
-import { Button, KeyValue, SectionTitle, Slider } from './ui';
+import { Button, KeyValue, SectionTitle, Segmented, Slider } from './ui';
 
 const STAGE_NOTES: Record<StageId, string> = {
   1: 'The longest side is capped, so the settings behave the same on every image.',
@@ -34,6 +39,13 @@ const STAGE_NOTES: Record<StageId, string> = {
   6: 'Straight segments found in the outlines. These are not walls yet.',
   7: 'Faces paired into wall centerlines, gaps inside a wall bridged, corners and junctions closed.',
 };
+/** What steps 3, 4 and 7 do instead when the trained model finds the wall pixels. */
+const MODEL_STAGE_NOTES: Partial<Record<StageId, string>> = {
+  3: 'The trained model labels every pixel: wall, door, window or nothing.',
+  4: 'Small specks the model marked are removed. Doors and windows count as wall here, so each wall runs on through them.',
+  7: 'Faces paired into wall centerlines and corners closed; then each door and window is placed on the wall it lies along.',
+};
+const megabytes = (bytes: number) => (bytes / 1e6).toFixed(0);
 
 const TUNABLES: { key: TunableKey; label: string; min: number; max: number; step: number; unit: string; hint: string }[] = [
   { key: 'fillKernel', label: 'Fill outlined walls', min: 1, max: 25, step: 2, unit: ' px', hint: 'Step 4: joins double-line and hatched walls before thin lines are erased; 9 worked best on real scans (1 = off)' },
@@ -48,7 +60,8 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
   // The image, settings and run are shared with How it works → Pipeline (pipelineSession.ts).
   const { cv, error: cvError } = useOpenCv();
   usePipelineRunner(cv);
-  const { testPlans, selectedPlanId, source, sourceError, overrides, run, runError, running } = usePipelineSession();
+  const { testPlans, selectedPlanId, source, sourceError, overrides, method, modelProgress, methodNotice, run, runError, running } = usePipelineSession();
+  const model = useWallModel();
   const [stageId, setStageId] = useState<StageId>(7);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -73,7 +86,8 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
       by: t.by * resize,
       thickness: t.thickness * resize,
     }));
-    return scoreWalls(run.walls, truth);
+    // The known walls are the solid pieces between openings, so the model's walls are cut at its doors and windows first.
+    return scoreWalls(run.method === 'model' ? solidWallPieces(run.walls, run.openings) : run.walls, truth);
   }, [run, source, resize]);
   const calibrated = source?.pixelsPerMeter !== undefined;
   const openIn3D = () => {
@@ -89,20 +103,44 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
       ? 'Loading OpenCV.js, about 11 MB the first time…'
       : !source
         ? 'Loading the test plan…'
-        : 'Running the pipeline…';
+        : method === 'model'
+          ? 'Running the trained model…'
+          : 'Running the pipeline…';
 
+  const doorsFound = run?.openings.filter((o) => o.kind === 'door').length ?? 0;
+  const windowsFound = (run?.openings.length ?? 0) - doorsFound;
+  const found = run
+    ? run.method === 'model'
+      ? `${run.walls.length} wall pieces, ${doorsFound} doors and ${windowsFound} windows, found by the trained model.`
+      : `${run.walls.length} wall pieces from ${run.stats.total} raw segments.`
+    : '';
   const finding = !run
     ? 'Upload a floor plan image, or pick a test plan, and see what each processing step does to it.'
     : score
-      ? `${run.walls.length} wall pieces from ${run.stats.total} raw segments. They cover ${percent(score.recall)} of the real wall length, and ${percent(score.precision)} of what was found is real wall.`
-      : `${run.walls.length} wall pieces from ${run.stats.total} raw segments. This image has no known walls to score against.`;
+      ? `${found} They cover ${percent(score.recall)} of the real wall length, and ${percent(score.precision)} of what was found is real wall.`
+      : `${found} This image has no known walls to score against.`;
+
+  // What the trained model is doing, or did, in one line under the switch.
+  const modelStage = run?.method === 'model' ? run.stages.find((s) => s.id === 3) : null;
+  const modelBusy = method === 'model' && running && !modelStage;
+  const methodNote =
+    method === 'rules'
+      ? 'Steps written by hand: threshold, clean-up, lines. Quick, but double lines, hatching and text can mislead them.'
+      : model.status === 'loading'
+        ? `Getting the model${model.total ? `: ${megabytes(model.loaded)} of ${megabytes(model.total)} MB` : ''}…`
+        : modelProgress && running
+          ? `Looking at the image: part ${Math.min(modelProgress.done + 1, modelProgress.total)} of ${modelProgress.total}…`
+          : modelStage
+            ? `A neural network trained on 4,200 real plans. It ran ${modelStage.params.Ran} in ${formatMs(modelStage.timingMs)}.`
+            : 'A neural network trained on 4,200 real plans. It finds doors and windows too.';
+  const modelShare = model.status === 'loading' ? (model.total ? model.loaded / model.total : 0) : modelProgress ? modelProgress.done / modelProgress.total : null;
 
   return (
     <div className="flex flex-col gap-4 lg:h-full">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 max-w-3xl">
           <h1 className="text-[22px] font-semibold leading-7">Image to plan</h1>
-          <p className="num mt-1 text-muted">{finding}</p>
+          <p className="num mt-1 text-[15px] leading-6 text-muted">{finding}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {running && run && <Loader2 className="h-4 w-4 animate-spin text-muted" aria-label="Running" />}
@@ -182,8 +220,8 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
                 <StageCanvas image={stage.image} className="h-full w-full object-contain" label={`${stage.title} output`} />
               </div>
               <div className="flex flex-col gap-1.5 text-[13px]">
-                <p className="text-[14px] text-ink">{STAGE_NOTES[stage.id]}</p>
-                <StageLegend id={stage.id} />
+                <p className="text-[14px] text-ink">{(run.method === 'model' && MODEL_STAGE_NOTES[stage.id]) || STAGE_NOTES[stage.id]}</p>
+                <StageLegend id={stage.id} method={run.method} />
                 <p className="num text-muted">Settings: {formatEntries(stage.params)}</p>
                 <p className="num text-muted">Result: {formatEntries(stage.counts)}</p>
               </div>
@@ -198,6 +236,41 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
         </section>
 
         <aside className="flex flex-col gap-5 lg:min-h-0 lg:overflow-y-auto" aria-label="Summary and settings">
+          <section aria-label="How walls are found">
+            <SectionTitle
+              aside={
+                <a href={hrefOf('results')} className="text-xs text-muted underline-offset-2 hover:text-ink hover:underline">
+                  How they compare
+                </a>
+              }
+            >
+              Find walls with
+            </SectionTitle>
+            <Segmented<WallMethod>
+              label="Find walls with"
+              value={method}
+              onChange={setMethod}
+              className="flex w-full"
+              options={[
+                { value: 'rules', label: 'Rules' },
+                { value: 'model', label: 'Trained model' },
+              ]}
+            />
+            <p className="num mt-2 text-[13px] leading-5 text-muted" role="status">
+              {methodNote}
+            </p>
+            {methodNotice && (
+              <p className="mt-2 rounded-md bg-warning-soft px-3 py-2 text-[13px] leading-5 text-warning-ink" role="alert">
+                {methodNotice}
+              </p>
+            )}
+            {method === 'model' && modelShare !== null && (modelBusy || running) && (
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-control" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(modelShare * 100)}>
+                <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${Math.round(modelShare * 100)}%` }} />
+              </div>
+            )}
+          </section>
+
           <section>
             <SectionTitle>Summary</SectionTitle>
             {run && source && stats ? (
@@ -213,6 +286,11 @@ export const ImagePipelineLab: React.FC<{ onOpenIn3D?: (plan: FloorPlanDataset) 
                 </KeyValue>
                 <KeyValue label="Total time">{formatMs(run.totalMs)}</KeyValue>
                 <KeyValue label="Walls found">{run.walls.length}</KeyValue>
+                {run.method === 'model' && (
+                  <KeyValue label="Doors / windows found">
+                    {doorsFound} / {windowsFound}
+                  </KeyValue>
+                )}
                 <KeyValue label="Deskew">{run.vector.skewDeg.toFixed(1)}°</KeyValue>
                 <KeyValue label="Raw segments">{stats.total}</KeyValue>
                 <KeyValue label="Horizontal / vertical / slanted">
